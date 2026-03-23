@@ -277,6 +277,7 @@ class SettingsPayload(BaseModel):
     min_blob_area: Any = None
     cooldown_ms: Any = None
     jpeg_quality: Any = None
+    polyphony_limit: Any = None
 
 
 @app.get("/api/settings")

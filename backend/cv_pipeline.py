@@ -70,6 +70,7 @@ class DetectionPipeline:
             "cooldown_ms": 400,
             "jpeg_quality": 75,
             "debug_mode": False,
+            "polyphony_limit": 2,
         }
 
         # ---- Callback (set by server) ----
@@ -240,9 +241,13 @@ class DetectionPipeline:
 
     def _handle_detections(self, blobs: List[Tuple[int, int]]) -> None:
         cooldown = self.settings.get("cooldown_ms", 400) / 1000.0
+        polyphony_limit = int(self.settings.get("polyphony_limit", 2))
         now = time.monotonic()
+        fired_this_frame = 0
 
         for bx, by in blobs:
+            if fired_this_frame >= polyphony_limit:
+                break
             coord = self.calibration.transform_point(bx, by)
             if coord is None:
                 continue
@@ -259,6 +264,7 @@ class DetectionPipeline:
             self._active_key = key
             self._active_key_ts = now
 
+            fired_this_frame += 1
             if self.on_key_triggered:
                 try:
                     self.on_key_triggered(key)

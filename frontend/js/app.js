@@ -86,6 +86,7 @@ const settingCamera      = $('setting-camera');
 const settingSensitivity = $('setting-sensitivity');
 const settingCooldown    = $('setting-cooldown');
 const settingBlob        = $('setting-blob');
+const settingPolyphony   = $('setting-polyphony');
 
 // ---------------------------------------------------------------------------
 // WebSocket
@@ -450,6 +451,7 @@ function applySettingsToUI(s) {
     settingBlob.value              = s.min_blob_area;
     $('val-blob').textContent      = s.min_blob_area;
   }
+  if (s.polyphony_limit !== undefined) settingPolyphony.value = s.polyphony_limit;
 }
 
 // Live-update slider labels
@@ -556,9 +558,10 @@ btnSaveSettings.addEventListener('click', async () => {
   const src = settingCamera.value.trim();
   await post(API.settings, {
     camera_source: /^\d+$/.test(src) ? parseInt(src, 10) : src,
-    sensitivity:   parseInt(settingSensitivity.value, 10),
-    cooldown_ms:   parseInt(settingCooldown.value, 10),
-    min_blob_area: parseInt(settingBlob.value, 10),
+    sensitivity:     parseInt(settingSensitivity.value, 10),
+    cooldown_ms:     parseInt(settingCooldown.value, 10),
+    min_blob_area:   parseInt(settingBlob.value, 10),
+    polyphony_limit: Math.max(1, parseInt(settingPolyphony.value, 10) || 2),
   });
 });
 
