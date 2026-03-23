@@ -61,8 +61,10 @@ def _generate_piano_tone(frequency: float, duration: float = TONE_DURATION) -> n
 
     wave *= env
 
-    # Convert to int16 stereo
-    mono = (wave * 32767 * 0.75).astype(np.int16)
+    # Encode at 85 % of full scale, leaving headroom for the mixer to sum
+    # multiple simultaneous voices without clipping (set_volume below brings
+    # the per-channel peak to ~13 900, so two notes at peak = ~27 800 < 32 767).
+    mono = (wave * 32767 * 0.85).astype(np.int16)
     stereo = np.ascontiguousarray(np.column_stack([mono, mono]))
     return stereo
 
@@ -114,7 +116,10 @@ class AudioEngine:
         if sound is None:
             return False
         try:
-            sound.play()
+            # fade_ms=8 adds a short mixer-level fade-in, preventing the
+            # click that occurs when a new note starts while another channel
+            # is still outputting a non-zero sample value.
+            sound.play(fade_ms=8)
             return True
         except Exception as e:
             print(f"[Audio] Play error for {note_name}: {e}")
@@ -147,7 +152,9 @@ class AudioEngine:
             try:
                 data = _generate_piano_tone(frequency)
                 sound = pygame.sndarray.make_sound(data)
-                sound.set_volume(0.75)
+                # 0.50 × 0.85 encoding ≈ 13 900 peak per voice; two voices
+                # sum to ~27 800 — safely below the 32 767 int16 ceiling.
+                sound.set_volume(0.50)
                 self._cache[name] = sound
                 print(f"[Audio] Synthesised tone for {name} ({frequency:.1f} Hz)")
                 return sound
