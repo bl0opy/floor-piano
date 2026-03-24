@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Floor Piano</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+
+<!-- ===== Top bar ===================================================== -->
+<header class="topbar">
+  <span class="logo">🎹 Floor Piano</span>
+  <span id="ws-status" class="badge badge-off">Disconnected</span>
+</header>
+
+<!-- ===== Main layout ================================================= -->
+<main class="layout">
+
+  <!-- ---- Left column: video + calibration toolbar ---- -->
+  <section class="video-section">
+
+    <div id="video-container">
+      <!-- MJPEG stream -->
+      <img id="video-feed" src="/video_feed" alt="Camera feed" />
+      <!-- Canvas overlaid exactly on top for calibration drawing -->
+      <canvas id="overlay-canvas"></canvas>
+      <!-- Active-key pop-up -->
+      <div id="key-pop" class="key-pop hidden"></div>
+    </div>
+
+    <!-- Calibration toolbar (always visible, greyed out when not in cal mode) -->
+    <div class="cal-toolbar">
+      <button id="btn-cal-toggle" class="btn btn-primary">Calibrate</button>
+      <button id="btn-cal-clear"  class="btn btn-secondary">Clear Points</button>
+      <label class="inline-label">
+        Keys
+        <input id="num-keys" type="number" min="1" max="24" value="8" class="input-sm" />
+      </label>
+      <button id="btn-cal-save"  class="btn btn-success" disabled>Save Calibration</button>
+      <button id="btn-cal-delete" class="btn btn-danger">Delete Calibration</button>
+      <span id="cal-hint" class="cal-hint">Enter calibration mode, then click 4 corners of the floor region.</span>
+    </div>
+
+  </section>
+
+  <!-- ---- Right column: controls ---- -->
+  <aside class="controls-panel">
+
+    <!-- Detection -->
+    <div class="card">
+      <h3>Detection</h3>
+      <div class="row gap-8">
+        <button id="btn-detect-start"  class="btn btn-success flex-1">▶ Start</button>
+        <button id="btn-detect-stop"   class="btn btn-danger  flex-1">■ Stop</button>
+      </div>
+      <button id="btn-reset-bg" class="btn btn-secondary full-width mt-8">
+        Reset Background Model
+      </button>
+      <p class="note">After placing the camera, click Start. Wait 2–3 s for the background to stabilise, then step on the keys.</p>
+    </div>
+
+    <!-- Active key display -->
+    <div class="card card-highlight">
+      <h3>Active Key</h3>
+      <div id="active-key-display" class="active-key-display">—</div>
+      <div id="active-note-display" class="active-note-display">—</div>
+    </div>
+
+    <!-- Piano key map (rendered dynamically) -->
+    <div class="card">
+      <h3>Key Map</h3>
+      <div id="key-map" class="key-map"></div>
+    </div>
+
+    <!-- Settings -->
+    <div class="card">
+      <h3>Settings</h3>
+
+      <label class="setting-row">
+        <span>Camera source</span>
+        <input id="setting-camera" type="text" value="0" class="input-sm"
+               title="Webcam index (0, 1…) or RTSP/HTTP URL" />
+      </label>
+
+      <label class="setting-row">
+        <span>Sensitivity <span id="val-sensitivity">60</span></span>
+        <input id="setting-sensitivity" type="range" min="0" max="100" value="60" />
+      </label>
+
+      <label class="setting-row">
+        <span>Cooldown <span id="val-cooldown">400</span> ms</span>
+        <input id="setting-cooldown" type="range" min="100" max="2000" step="50" value="400" />
+      </label>
+
+      <label class="setting-row">
+        <span>Min blob area <span id="val-blob">800</span> px²</span>
+        <input id="setting-blob" type="range" min="100" max="5000" step="100" value="800" />
+      </label>
+
+      <label class="setting-row">
+        <span>Polyphony limit</span>
+        <input id="setting-polyphony" type="number" min="1" max="10" value="2" class="input-sm"
+               title="Max simultaneous detections (notes) per frame" />
+      </label>
+
+      <label class="setting-row">
+        <span>Flip camera horizontally</span>
+        <input id="setting-flip" type="checkbox" class="toggle" title="Mirror the camera feed left–right" />
+      </label>
+
+      <button id="btn-save-settings" class="btn btn-primary full-width mt-8">
+        Apply Settings
+      </button>
+    </div>
+
+  </aside>
+
+</main>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>
