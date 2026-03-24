@@ -87,6 +87,7 @@ const settingSensitivity = $('setting-sensitivity');
 const settingCooldown    = $('setting-cooldown');
 const settingBlob        = $('setting-blob');
 const settingPolyphony   = $('setting-polyphony');
+const settingFlip        = $('setting-flip');
 
 // ---------------------------------------------------------------------------
 // WebSocket
@@ -452,6 +453,7 @@ function applySettingsToUI(s) {
     $('val-blob').textContent      = s.min_blob_area;
   }
   if (s.polyphony_limit !== undefined) settingPolyphony.value = s.polyphony_limit;
+  if (s.flip_horizontal !== undefined) settingFlip.checked = !!s.flip_horizontal;
 }
 
 // Live-update slider labels
@@ -562,6 +564,7 @@ btnSaveSettings.addEventListener('click', async () => {
     cooldown_ms:     parseInt(settingCooldown.value, 10),
     min_blob_area:   parseInt(settingBlob.value, 10),
     polyphony_limit: Math.max(1, parseInt(settingPolyphony.value, 10) || 2),
+    flip_horizontal: settingFlip.checked,
   });
 });
 

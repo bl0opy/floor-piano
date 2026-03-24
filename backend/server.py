@@ -278,6 +278,7 @@ class SettingsPayload(BaseModel):
     cooldown_ms: Any = None
     jpeg_quality: Any = None
     polyphony_limit: Any = None
+    flip_horizontal: Any = None
 
 
 @app.get("/api/settings")

@@ -155,6 +155,9 @@ class DetectionPipeline:
                 time.sleep(0.05)
                 continue
 
+            if self.settings.get("flip_horizontal", False):
+                frame = cv2.flip(frame, 1)
+
             annotated = self._process(frame)
 
             quality = self.settings.get("jpeg_quality", 75)

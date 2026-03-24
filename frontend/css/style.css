@@ -297,6 +297,14 @@ input[type="range"] {
   accent-color: var(--accent);
 }
 
+input[type="checkbox"].toggle {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
 .setting-row {
   display: flex;
   align-items: center;
