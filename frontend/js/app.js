@@ -206,6 +206,8 @@ function syncCanvas() {
   const rect = videoFeed.getBoundingClientRect();
   canvas.width  = rect.width  || 640;
   canvas.height = rect.height || 480;
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
 }
 
 function canvasToVideo(cx, cy) {
@@ -308,7 +310,7 @@ function drawHandle(x, y, color) {
 // ---------------------------------------------------------------------------
 
 function canvasPos(ev) {
-  const r = canvas.getBoundingClientRect();
+  const r = videoFeed.getBoundingClientRect();
   return { x: ev.clientX - r.left, y: ev.clientY - r.top };
 }
 
