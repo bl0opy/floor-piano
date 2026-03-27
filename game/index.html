@@ -230,6 +230,62 @@ let lastTime   = 0;
 let audioCtx   = null;
 let shakeTime  = 0;        // canvas shake on game-over
 
+// ─── WebSocket for foot detection ───────────────────────────────────────────
+let ws = null;
+const activeFootKeys = new Set();  // Track which keys are currently pressed by feet
+
+function connectWebSocket() {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${protocol}//${window.location.host}/ws`;
+  
+  ws = new WebSocket(wsUrl);
+  
+  ws.onopen = () => {
+    console.log('[Piano Tiles] Connected to foot detection');
+  };
+  
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    
+    if (msg.type === 'key_triggered') {
+      // Map region_index (0-3) to keyboard keys (A-S-D-F)
+      const keys = ['a', 's', 'd', 'f'];
+      const key = keys[msg.region_index];
+      
+      if (key && state === 'playing') {
+        activeFootKeys.add(key);
+        simulateKeyPress(key);
+      }
+    } else if (msg.type === 'key_released') {
+      const keys = ['a', 's', 'd', 'f'];
+      const key = keys[msg.region_index];
+      if (key) {
+        activeFootKeys.delete(key);
+      }
+    }
+  };
+  
+  ws.onerror = (error) => {
+    console.error('[Piano Tiles] WebSocket error:', error);
+  };
+  
+  ws.onclose = () => {
+    console.log('[Piano Tiles] Disconnected from foot detection');
+    // Attempt to reconnect every 3 seconds
+    setTimeout(connectWebSocket, 3000);
+  };
+}
+
+function simulateKeyPress(key) {
+  // Simulate a keyboard press event for the game logic
+  const event = new KeyboardEvent('keydown', {
+    key: key,
+    code: key.toUpperCase(),
+    bubbles: true,
+  });
+  document.dispatchEvent(event);
+}
+
 // ─── Audio ──────────────────────────────────────────────────────────────────
 function initAudio() {
   if (!audioCtx) {
@@ -295,6 +351,25 @@ function refillTiles() {
 }
 
 // ─── Game lifecycle ──────────────────────────────────────────────────────────
+function startCountdown() {
+  let countDown = 5;
+  overlay.classList.remove('hidden');
+  
+  const countdownInterval = setInterval(() => {
+    if (countDown > 0) {
+      overlay.innerHTML = `
+        <div style="font-size: 120px; font-weight: 700; color: #fff; text-shadow: 0 0 30px rgba(255,255,255,0.5);">
+          ${countDown}
+        </div>
+      `;
+      countDown--;
+    } else {
+      clearInterval(countdownInterval);
+      startGame();
+    }
+  }, 1000);
+}
+
 function startGame() {
   initAudio();
   tiles   = [];
@@ -329,7 +404,7 @@ function endGame() {
       <h1>GAME OVER</h1>
       <div class="subtitle">FINAL SCORE</div>
       <div class="final-score">${score}</div>
-      <button id="play-btn" onclick="startGame()"
+      <button id="play-btn" onclick="startCountdown()"
         style="padding:14px 52px;font-size:18px;font-weight:700;letter-spacing:3px;
                background:#fff;color:#0d0d0d;border:none;border-radius:6px;
                cursor:pointer;text-transform:uppercase;">
@@ -520,9 +595,12 @@ function draw() {
   // Start the loop so score-pop animation works after game starts
   lastTime = performance.now();
   animId = requestAnimationFrame(loop);
+
+  // Connect to foot detection WebSocket
+  connectWebSocket();
 })();
 
-playBtn.addEventListener('click', startGame);
+playBtn.addEventListener('click', startCountdown);
 </script>
 </body>
 </html>

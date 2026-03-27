@@ -151,6 +151,12 @@ async def index() -> HTMLResponse:
     return HTMLResponse((FRONTEND_DIR / "index.html").read_text())
 
 
+@app.get("/game", response_class=HTMLResponse)
+async def game() -> HTMLResponse:
+    game_file = Path(__file__).parent.parent / "game" / "index.html"
+    return HTMLResponse(game_file.read_text())
+
+
 # ---------------------------------------------------------------------------
 # MJPEG video stream
 # ---------------------------------------------------------------------------
