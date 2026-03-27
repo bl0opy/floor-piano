@@ -6,8 +6,8 @@ Runs a dedicated background thread that:
   2. Applies MOG2 background subtraction inside the union of all calibrated regions
   3. Finds foreground blobs (feet) via contour analysis
   4. Checks which detection region each blob centroid falls in
-  5. Applies per-region debounce / cooldown
-  6. Fires on_key_triggered(region_index) callback
+  5. Computes region enter/exit transitions
+  6. Fires callbacks for region-enter and region-exit events
   7. Produces JPEG-encoded annotated frames for the MJPEG stream
 
 All public attributes and methods are safe to call from the main thread.
@@ -15,7 +15,7 @@ All public attributes and methods are safe to call from the main thread.
 
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import cv2
 import numpy as np
@@ -54,8 +54,8 @@ class DetectionPipeline:
         self._detection_enabled = False
         self._bg_sub = self._make_bg_sub()
 
-        # Per-region cooldown: region_index → absolute timestamp when next trigger allowed
-        self._cooldown_until: Dict[int, float] = {}
+        # Regions currently occupied by at least one detected blob.
+        self._occupied_regions: Set[int] = set()
 
         # Currently highlighted regions: region_index → trigger timestamp
         self._active_regions: Dict[int, float] = {}
@@ -72,6 +72,8 @@ class DetectionPipeline:
 
         # ---- Callback (set by server) ----
         self.on_key_triggered: Optional[Callable[[int], None]] = None
+        self.on_region_entered: Optional[Callable[[int], None]] = None
+        self.on_region_exited: Optional[Callable[[int], None]] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -113,8 +115,14 @@ class DetectionPipeline:
         self._detection_enabled = enabled
         if enabled:
             self._bg_sub = self._make_bg_sub()
+            self._occupied_regions.clear()
             print("[CV] Detection enabled — learning background…")
         else:
+            # Emit synthetic exits so held notes release immediately when paused.
+            for region_idx in sorted(self._occupied_regions):
+                self._emit_region_exited(region_idx)
+            self._occupied_regions.clear()
+            self._active_regions.clear()
             print("[CV] Detection disabled")
 
     def configure(self, settings: Dict[str, Any]) -> None:
@@ -237,32 +245,46 @@ class DetectionPipeline:
         return centroids
 
     def _handle_detections(self, blobs: List[Tuple[int, int]]) -> None:
-        cooldown = self.settings.get("cooldown_ms", 400) / 1000.0
-        polyphony_limit = int(self.settings.get("polyphony_limit", 4))
         now = time.monotonic()
-        fired_this_frame = 0
+        occupied_now: Set[int] = set()
 
         for bx, by in blobs:
-            if fired_this_frame >= polyphony_limit:
-                break
-
             region_idx = self.calibration.point_in_any_region(bx, by)
             if region_idx == -1:
                 continue
+            occupied_now.add(region_idx)
 
-            if now < self._cooldown_until.get(region_idx, 0.0):
-                continue
+        entered = sorted(occupied_now - self._occupied_regions)
+        exited = sorted(self._occupied_regions - occupied_now)
 
-            # Fire!
-            self._cooldown_until[region_idx] = now + cooldown
+        for region_idx in exited:
+            self._emit_region_exited(region_idx)
+
+        for region_idx in entered:
             self._active_regions[region_idx] = now
-            fired_this_frame += 1
+            self._emit_region_entered(region_idx)
 
-            if self.on_key_triggered:
-                try:
-                    self.on_key_triggered(region_idx)
-                except Exception as e:
-                    print(f"[CV] on_key_triggered error: {e}")
+        self._occupied_regions = occupied_now
+
+    def _emit_region_entered(self, region_idx: int) -> None:
+        if self.on_region_entered:
+            try:
+                self.on_region_entered(region_idx)
+            except Exception as e:
+                print(f"[CV] on_region_entered error: {e}")
+        # Backward-compat callback path.
+        if self.on_key_triggered:
+            try:
+                self.on_key_triggered(region_idx)
+            except Exception as e:
+                print(f"[CV] on_key_triggered error: {e}")
+
+    def _emit_region_exited(self, region_idx: int) -> None:
+        if self.on_region_exited:
+            try:
+                self.on_region_exited(region_idx)
+            except Exception as e:
+                print(f"[CV] on_region_exited error: {e}")
 
     # ------------------------------------------------------------------
     # Drawing helpers

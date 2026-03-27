@@ -73,6 +73,7 @@ class AudioEngine:
     def __init__(self):
         self._ready = False
         self._cache: Dict[str, pygame.mixer.Sound] = {}
+        self._active_channels: Dict[str, pygame.mixer.Channel] = {}
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -98,6 +99,13 @@ class AudioEngine:
 
     def shutdown(self) -> None:
         if self._ready:
+            with self._lock:
+                for channel in self._active_channels.values():
+                    try:
+                        channel.stop()
+                    except Exception:
+                        pass
+                self._active_channels.clear()
             pygame.mixer.quit()
             self._ready = False
 
@@ -112,17 +120,41 @@ class AudioEngine:
 
     def play_note(self, note_name: str, frequency: float) -> bool:
         """Non-blocking. Returns True if the note was played."""
+        return self.note_on(note_name, frequency)
+
+    def note_on(self, note_name: str, frequency: float) -> bool:
+        """Start (and hold) a note until note_off is called."""
         sound = self._get_sound(note_name, frequency)
         if sound is None:
             return False
+        with self._lock:
+            existing = self._active_channels.get(note_name)
+            if existing is not None and existing.get_busy():
+                return True
+            if existing is not None and not existing.get_busy():
+                self._active_channels.pop(note_name, None)
+            try:
+                # loops=-1 sustains the note; note_off controls release.
+                channel = sound.play(loops=-1, fade_ms=8)
+                if channel is None:
+                    return False
+                self._active_channels[note_name] = channel
+                return True
+            except Exception as e:
+                print(f"[Audio] Play error for {note_name}: {e}")
+                return False
+
+    def note_off(self, note_name: str) -> bool:
+        """Release a currently held note."""
+        with self._lock:
+            channel = self._active_channels.pop(note_name, None)
+        if channel is None:
+            return False
         try:
-            # fade_ms=8 adds a short mixer-level fade-in, preventing the
-            # click that occurs when a new note starts while another channel
-            # is still outputting a non-zero sample value.
-            sound.play(fade_ms=8)
+            channel.fadeout(80)
             return True
         except Exception as e:
-            print(f"[Audio] Play error for {note_name}: {e}")
+            print(f"[Audio] Stop error for {note_name}: {e}")
             return False
 
     # ------------------------------------------------------------------

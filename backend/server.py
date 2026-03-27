@@ -69,7 +69,9 @@ async def _startup() -> None:
     ).start()
 
     _pipeline.configure(_settings)
-    _pipeline.on_key_triggered = _on_region_triggered
+    _pipeline.on_region_entered = _on_region_entered
+    _pipeline.on_region_exited = _on_region_exited
+    _pipeline.on_key_triggered = None
 
     src = _settings.get("camera_source", 0)
     if isinstance(src, str) and src.isdigit():
@@ -86,20 +88,39 @@ async def _shutdown() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Region-trigger callback (called from CV thread)
+# Region enter/exit callbacks (called from CV thread)
 # ---------------------------------------------------------------------------
 
-def _on_region_triggered(region_index: int) -> None:
-    """Play the note assigned to the triggered region and broadcast the event."""
+def _on_region_entered(region_index: int) -> None:
+    """Start the note assigned to the entered region and broadcast an event."""
     if region_index >= len(_calibration.regions):
         return
     note_name = _calibration.regions[region_index].note
     note = ALL_NOTES_BY_NAME.get(note_name)
     if note:
-        _audio.play_note(note["name"], note["frequency"])
+        _audio.note_on(note["name"], note["frequency"])
 
     event = {
         "type": "key_triggered",
+        "region_index": region_index,
+        "note_name": note_name,
+        "note_label": note["label"] if note else note_name,
+    }
+    if _event_loop and _event_loop.is_running():
+        asyncio.run_coroutine_threadsafe(_broadcast(event), _event_loop)
+
+
+def _on_region_exited(region_index: int) -> None:
+    """Release the note assigned to the exited region and broadcast an event."""
+    if region_index >= len(_calibration.regions):
+        return
+    note_name = _calibration.regions[region_index].note
+    note = ALL_NOTES_BY_NAME.get(note_name)
+    if note:
+        _audio.note_off(note["name"])
+
+    event = {
+        "type": "key_released",
         "region_index": region_index,
         "note_name": note_name,
         "note_label": note["label"] if note else note_name,
