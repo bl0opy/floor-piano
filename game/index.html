@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Piano Tiles</title>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0d0d0d;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      color: #fff;
+      user-select: none;
+      overflow: hidden;
+    }
+
+    #hud {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    #score {
+      font-size: 56px;
+      font-weight: 700;
+      letter-spacing: 6px;
+      color: #fff;
+      min-width: 3ch;
+      text-align: center;
+      text-shadow: 0 0 20px rgba(255,255,255,0.3);
+      transition: transform 0.08s ease-out;
+    }
+
+    #score.pop {
+      transform: scale(1.18);
+    }
+
+    #speed-label {
+      font-size: 14px;
+      color: #555;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+
+    #game-wrap {
+      position: relative;
+    }
+
+    canvas {
+      display: block;
+      border-radius: 2px;
+    }
+
+    /* Overlay (menu / game over) */
+    #overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.78);
+      backdrop-filter: blur(4px);
+      border-radius: 2px;
+      transition: opacity 0.2s;
+    }
+
+    #overlay.hidden {
+      display: none;
+    }
+
+    #overlay h1 {
+      font-size: 42px;
+      font-weight: 700;
+      letter-spacing: 4px;
+      margin-bottom: 10px;
+      text-shadow: 0 0 30px rgba(255,255,255,0.2);
+    }
+
+    #overlay .subtitle {
+      font-size: 15px;
+      color: #777;
+      letter-spacing: 2px;
+      margin-bottom: 8px;
+    }
+
+    #overlay .final-score {
+      font-size: 64px;
+      font-weight: 700;
+      color: #fff;
+      margin: 8px 0 28px;
+    }
+
+    #overlay .keys-hint {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 32px;
+    }
+
+    .key-chip {
+      width: 44px;
+      height: 44px;
+      border: 2px solid #444;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      font-weight: 700;
+      color: #aaa;
+      background: #1a1a1a;
+    }
+
+    #play-btn {
+      padding: 14px 52px;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 3px;
+      background: #fff;
+      color: #0d0d0d;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      text-transform: uppercase;
+      transition: background 0.15s, transform 0.1s;
+    }
+
+    #play-btn:hover { background: #ddd; transform: scale(1.03); }
+    #play-btn:active { transform: scale(0.97); }
+
+    /* Bottom key indicators */
+    #key-bar {
+      display: flex;
+      width: 400px;
+      margin-top: 12px;
+    }
+
+    .kb {
+      flex: 1;
+      text-align: center;
+      font-size: 24px;
+      font-weight: 700;
+      padding: 10px 0;
+      color: #444;
+      border: 1px solid #1e1e1e;
+      border-top: none;
+      background: #111;
+      transition: background 0.07s, color 0.07s;
+      border-radius: 0 0 3px 3px;
+    }
+
+    .kb.hit {
+      background: #2a2a2a;
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="hud">
+    <div id="score">0</div>
+    <div id="speed-label">SCORE</div>
+  </div>
+
+  <div id="game-wrap">
+    <canvas id="game" width="400" height="640"></canvas>
+
+    <div id="overlay">
+      <h1>PIANO TILES</h1>
+      <div class="keys-hint">
+        <div class="key-chip">A</div>
+        <div class="key-chip">S</div>
+        <div class="key-chip">D</div>
+        <div class="key-chip">F</div>
+      </div>
+      <div class="subtitle">PRESS THE FALLING TILES</div>
+      <div class="subtitle" style="margin-bottom:28px">MISCLICKS LOSE • DON'T MISS A TILE</div>
+      <button id="play-btn">PLAY</button>
+    </div>
+  </div>
+
+  <div id="key-bar">
+    <div class="kb" id="kb-0">A</div>
+    <div class="kb" id="kb-1">S</div>
+    <div class="kb" id="kb-2">D</div>
+    <div class="kb" id="kb-3">F</div>
+  </div>
+
+<script>
+// ─── Config ─────────────────────────────────────────────────────────────────
+const W = 400, H = 640;
+const COLS = 4;
+const TW = W / COLS;   // tile width  = 100
+const TH = 160;        // tile height
+const HIT_Y = H - TH; // y where hit zone starts = 480
+const GAP = 4;         // inner padding on tiles
+
+const SPEED_INIT = 220;  // px / second
+const SPEED_MAX  = 650;
+const SPEED_STEP = 6;    // px/s added per point
+
+// Notes per column: C4 E4 G4 C5
+const FREQS = [261.63, 329.63, 392.00, 523.25];
+const KEY_MAP = { a: 0, s: 1, d: 2, f: 3 };
+const KEY_IDS = ['kb-0', 'kb-1', 'kb-2', 'kb-3'];
+
+// ─── DOM ────────────────────────────────────────────────────────────────────
+const canvas  = document.getElementById('game');
+const ctx     = canvas.getContext('2d');
+const overlay = document.getElementById('overlay');
+const scoreEl = document.getElementById('score');
+const playBtn = document.getElementById('play-btn');
+const kbEls   = KEY_IDS.map(id => document.getElementById(id));
+
+// ─── State ──────────────────────────────────────────────────────────────────
+let state      = 'menu';   // 'menu' | 'playing' | 'over'
+let tiles      = [];
+let flashes    = [];       // { x, y, alpha }
+let score      = 0;
+let speed      = SPEED_INIT;
+let animId     = null;
+let lastTime   = 0;
+let audioCtx   = null;
+let shakeTime  = 0;        // canvas shake on game-over
+
+// ─── Audio ──────────────────────────────────────────────────────────────────
+function initAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function playNote(freq) {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const osc  = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+
+  // Soft triangle + octave up for brightness
+  const osc2  = audioCtx.createOscillator();
+  const gain2 = audioCtx.createGain();
+
+  osc.type  = 'triangle';
+  osc.frequency.setValueAtTime(freq, t);
+  gain.gain.setValueAtTime(0.0, t);
+  gain.gain.linearRampToValueAtTime(0.45, t + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.9);
+
+  osc2.type = 'sine';
+  osc2.frequency.setValueAtTime(freq * 2, t);
+  gain2.gain.setValueAtTime(0.0, t);
+  gain2.gain.linearRampToValueAtTime(0.12, t + 0.005);
+  gain2.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+
+  osc.connect(gain);   gain.connect(audioCtx.destination);
+  osc2.connect(gain2); gain2.connect(audioCtx.destination);
+  osc.start(t);  osc.stop(t + 0.9);
+  osc2.start(t); osc2.stop(t + 0.5);
+}
+
+function playMiss() {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const osc  = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(90, t);
+  osc.frequency.linearRampToValueAtTime(50, t + 0.25);
+  gain.gain.setValueAtTime(0.35, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+  osc.connect(gain); gain.connect(audioCtx.destination);
+  osc.start(t); osc.stop(t + 0.3);
+}
+
+// ─── Tile management ────────────────────────────────────────────────────────
+function topTileY() {
+  if (tiles.length === 0) return H;
+  return Math.min(...tiles.map(t => t.y));
+}
+
+function refillTiles() {
+  // Ensure tiles extend at least 2 tile-heights above the canvas top
+  while (topTileY() > -TH * 2) {
+    const col = Math.floor(Math.random() * COLS);
+    tiles.push({ col, y: topTileY() - TH });
+  }
+}
+
+// ─── Game lifecycle ──────────────────────────────────────────────────────────
+function startGame() {
+  initAudio();
+  tiles   = [];
+  flashes = [];
+  score   = 0;
+  speed   = SPEED_INIT;
+  state   = 'playing';
+  shakeTime = 0;
+
+  scoreEl.textContent = '0';
+  overlay.classList.add('hidden');
+  kbEls.forEach(el => el.classList.remove('hit'));
+
+  // Pre-fill so first tile arrives in the hit zone after ~1s
+  // Place first tile at the very top; more above it
+  tiles.push({ col: Math.floor(Math.random() * COLS), y: -TH });
+  refillTiles();
+
+  if (animId) cancelAnimationFrame(animId);
+  lastTime = performance.now();
+  animId = requestAnimationFrame(loop);
+}
+
+function endGame() {
+  state = 'over';
+  shakeTime = 0.35;
+  playMiss();
+
+  setTimeout(() => {
+    overlay.classList.remove('hidden');
+    overlay.innerHTML = `
+      <h1>GAME OVER</h1>
+      <div class="subtitle">FINAL SCORE</div>
+      <div class="final-score">${score}</div>
+      <button id="play-btn" onclick="startGame()"
+        style="padding:14px 52px;font-size:18px;font-weight:700;letter-spacing:3px;
+               background:#fff;color:#0d0d0d;border:none;border-radius:6px;
+               cursor:pointer;text-transform:uppercase;">
+        RETRY
+      </button>
+    `;
+  }, 320);
+}
+
+// ─── Input ───────────────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (state !== 'playing') return;
+  const col = KEY_MAP[e.key.toLowerCase()];
+  if (col === undefined) return;
+  e.preventDefault();
+
+  // Find best hittable tile in this column:
+  // tile overlaps hit zone if tile.y + TH > HIT_Y && tile.y < H
+  let best = null, bestDist = Infinity;
+  for (const tile of tiles) {
+    if (tile.col !== col) continue;
+    if (tile.y + TH > HIT_Y && tile.y < H) {
+      const center = tile.y + TH / 2;
+      const dist   = Math.abs(center - (HIT_Y + TH / 2));
+      if (dist < bestDist) { bestDist = dist; best = tile; }
+    }
+  }
+
+  if (best) {
+    // ✓ Hit
+    score++;
+    speed = Math.min(SPEED_INIT + score * SPEED_STEP, SPEED_MAX);
+    scoreEl.textContent = score;
+
+    // Score pop animation
+    scoreEl.classList.remove('pop');
+    void scoreEl.offsetWidth; // reflow
+    scoreEl.classList.add('pop');
+
+    // Flash effect at tile position
+    flashes.push({ x: best.col * TW + GAP, y: best.y + GAP,
+                   w: TW - GAP*2, h: TH - GAP*2, alpha: 1 });
+
+    // Remove tile
+    tiles = tiles.filter(t => t !== best);
+    refillTiles();
+
+    // Play note
+    playNote(FREQS[col]);
+
+    // Key bar feedback
+    kbEls[col].classList.add('hit');
+    setTimeout(() => kbEls[col].classList.remove('hit'), 120);
+
+  } else {
+    // ✗ Misclick → game over
+    endGame();
+  }
+});
+
+// ─── Game loop ───────────────────────────────────────────────────────────────
+function loop(now) {
+  animId = requestAnimationFrame(loop);
+  if (state !== 'playing') return;
+
+  const dt = Math.min((now - lastTime) / 1000, 0.05); // cap at 50ms
+  lastTime = now;
+
+  // Move tiles
+  const dy = speed * dt;
+  for (const tile of tiles) tile.y += dy;
+
+  // Decay flash effects
+  for (const f of flashes) f.alpha -= dt * 4;
+  flashes = flashes.filter(f => f.alpha > 0);
+
+  // Decay shake
+  if (shakeTime > 0) shakeTime = Math.max(0, shakeTime - dt);
+
+  // Miss check: any unhit tile fully below canvas?
+  for (const tile of tiles) {
+    if (tile.y > H) { endGame(); return; }
+  }
+
+  refillTiles();
+  draw(dt);
+}
+
+// ─── Render ──────────────────────────────────────────────────────────────────
+function draw() {
+  const shake = shakeTime > 0
+    ? Math.sin(shakeTime * 80) * 6 * (shakeTime / 0.35)
+    : 0;
+
+  ctx.save();
+  ctx.translate(shake, 0);
+
+  // ── Background ──
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, W, H);
+
+  // ── Hit zone background ──
+  ctx.fillStyle = 'rgba(255,255,255,0.035)';
+  ctx.fillRect(0, HIT_Y, W, TH);
+
+  // ── Hit zone top line ──
+  ctx.strokeStyle = '#2e2e2e';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, HIT_Y);
+  ctx.lineTo(W, HIT_Y);
+  ctx.stroke();
+
+  // ── Column dividers ──
+  ctx.strokeStyle = '#1c1c1c';
+  ctx.lineWidth = 2;
+  for (let i = 1; i < COLS; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * TW, 0);
+    ctx.lineTo(i * TW, H);
+    ctx.stroke();
+  }
+
+  // ── Flash effects (tile hit glow) ──
+  for (const f of flashes) {
+    const a = Math.max(0, f.alpha);
+    ctx.fillStyle = `rgba(255, 255, 255, ${a * 0.85})`;
+    ctx.fillRect(f.x, f.y, f.w, f.h);
+  }
+
+  // ── Tiles ──
+  for (const tile of tiles) {
+    const x = tile.col * TW;
+    const y = tile.y;
+
+    // Main tile body
+    ctx.fillStyle = '#141414';
+    ctx.fillRect(x + GAP, y + GAP, TW - GAP*2, TH - GAP*2);
+
+    // Subtle top highlight
+    const grad = ctx.createLinearGradient(0, y + GAP, 0, y + GAP + 30);
+    grad.addColorStop(0, 'rgba(255,255,255,0.06)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(x + GAP, y + GAP, TW - GAP*2, 30);
+
+    // Highlight tile if it's in the hit zone (ready to press)
+    if (tile.y + TH > HIT_Y && tile.y < H) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x + GAP + 1, y + GAP + 1, TW - GAP*2 - 2, TH - GAP*2 - 2);
+    }
+  }
+
+  // ── Key labels inside hit zone ──
+  const labels = ['A', 'S', 'D', 'F'];
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `bold 22px 'Segoe UI', monospace`;
+  for (let i = 0; i < COLS; i++) {
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.fillText(labels[i], i * TW + TW / 2, HIT_Y + TH - 26);
+  }
+
+  // ── Bottom edge line ──
+  ctx.strokeStyle = '#1c1c1c';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, H - 2);
+  ctx.lineTo(W, H - 2);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+// ─── Initial render ───────────────────────────────────────────────────────────
+(function initDraw() {
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = '#1c1c1c';
+  ctx.lineWidth = 2;
+  for (let i = 1; i < COLS; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * TW, 0);
+    ctx.lineTo(i * TW, H);
+    ctx.stroke();
+  }
+  // Start the loop so score-pop animation works after game starts
+  lastTime = performance.now();
+  animId = requestAnimationFrame(loop);
+})();
+
+playBtn.addEventListener('click', startGame);
+</script>
+</body>
+</html>
