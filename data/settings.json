@@ -5,6 +5,6 @@
   "cooldown_ms": 100,
   "jpeg_quality": 75,
   "debug_mode": false,
-  "polyphony_limit": 2,
+  "polyphony_limit": 4,
   "flip_horizontal": true
 }
