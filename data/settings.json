@@ -1,6 +1,6 @@
 {
   "camera_source": 0,
-  "sensitivity": 6,
+  "sensitivity": 11,
   "min_blob_area": 500,
   "cooldown_ms": 100,
   "jpeg_quality": 75,

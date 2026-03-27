@@ -229,6 +229,7 @@ let animId     = null;
 let lastTime   = 0;
 let audioCtx   = null;
 let shakeTime  = 0;        // canvas shake on game-over
+let columnCooldown = [0, 0, 0, 0];  // per-column hit cooldown (100ms)
 
 // ─── WebSocket for foot detection ───────────────────────────────────────────
 let ws = null;
@@ -343,10 +344,13 @@ function topTileY() {
 }
 
 function refillTiles() {
-  // Ensure tiles extend at least 2 tile-heights above the canvas top
-  while (topTileY() > -TH * 2) {
+  // Spawn tiles more gradually - only when top tile is near screen top
+  // Keep minimum spacing of ~TH*1.3 between spawns to avoid rapid succession
+  const MIN_SPAWN_THRESHOLD = -TH * 1.3;
+  
+  while (topTileY() > MIN_SPAWN_THRESHOLD) {
     const col = Math.floor(Math.random() * COLS);
-    tiles.push({ col, y: topTileY() - TH });
+    tiles.push({ col, y: topTileY() - TH - 20 });  // Add 20px gap between tiles
   }
 }
 
@@ -378,6 +382,7 @@ function startGame() {
   speed   = SPEED_INIT;
   state   = 'playing';
   shakeTime = 0;
+  columnCooldown = [0, 0, 0, 0];  // Reset per-column cooldowns
 
   scoreEl.textContent = '0';
   overlay.classList.add('hidden');
@@ -421,12 +426,21 @@ document.addEventListener('keydown', e => {
   if (col === undefined) return;
   e.preventDefault();
 
+  // Check per-column cooldown (100ms) to match foot detection
+  const now = performance.now();
+  if (now - columnCooldown[col] < 100) {
+    return;  // Still in cooldown
+  }
+
+  // Expanded hit zone: give more vertical room to click
+  // Start from mid-tile height above hit zone, extend to bottom of canvas
+  const EXPANDED_HIT_Y = HIT_Y - TH / 2;
+  
   // Find best hittable tile in this column:
-  // tile overlaps hit zone if tile.y + TH > HIT_Y && tile.y < H
   let best = null, bestDist = Infinity;
   for (const tile of tiles) {
     if (tile.col !== col) continue;
-    if (tile.y + TH > HIT_Y && tile.y < H) {
+    if (tile.y + TH > EXPANDED_HIT_Y && tile.y < H) {
       const center = tile.y + TH / 2;
       const dist   = Math.abs(center - (HIT_Y + TH / 2));
       if (dist < bestDist) { bestDist = dist; best = tile; }
@@ -435,6 +449,7 @@ document.addEventListener('keydown', e => {
 
   if (best) {
     // ✓ Hit
+    columnCooldown[col] = now;  // Set cooldown
     score++;
     speed = Math.min(SPEED_INIT + score * SPEED_STEP, SPEED_MAX);
     scoreEl.textContent = score;
@@ -506,8 +521,13 @@ function draw() {
   ctx.fillStyle = '#111';
   ctx.fillRect(0, 0, W, H);
 
-  // ── Hit zone background ──
-  ctx.fillStyle = 'rgba(255,255,255,0.035)';
+  // ── Expanded hit zone background (with more vertical room) ──
+  const EXPANDED_HIT_Y = HIT_Y - TH / 2;
+  ctx.fillStyle = 'rgba(255,255,255,0.025)';
+  ctx.fillRect(0, EXPANDED_HIT_Y, W, TH + TH / 2);
+
+  // ── Stricter hit zone indicator (bottom portion) ──
+  ctx.fillStyle = 'rgba(255,255,255,0.05)';
   ctx.fillRect(0, HIT_Y, W, TH);
 
   // ── Hit zone top line ──
