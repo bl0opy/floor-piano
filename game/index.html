@@ -271,7 +271,8 @@ const playBtn = document.getElementById('play-btn');
 const footBoxes = FOOT_BOX_IDS.map(id => document.getElementById(id));
 
 // ─── State ──────────────────────────────────────────────────────────────────
-let state      = 'menu';   // 'menu' | 'playing' | 'over'
+let state      = 'menu';   // 'menu' | 'countdown' | 'playing' | 'over'
+let countdownIntervalId = null;
 let tiles      = [];
 let flashes    = [];       // { x, y, alpha }
 let score      = 0;
@@ -304,10 +305,13 @@ function connectWebSocket() {
       // Map region_index (0-3) to keyboard keys (A-S-D-F)
       const keys = ['a', 's', 'd', 'f'];
       const key = keys[msg.region_index];
-      
-      if (key && state === 'playing') {
+      if (!key) return;
+
+      if (state === 'playing') {
         activeFootKeys.add(key);
         simulateKeyPress(key);
+      } else if (state === 'menu' || state === 'over') {
+        startCountdown();
       }
     } else if (msg.type === 'key_released') {
       const keys = ['a', 's', 'd', 'f'];
@@ -413,10 +417,15 @@ function refillTiles() {
 
 // ─── Game lifecycle ──────────────────────────────────────────────────────────
 function startCountdown() {
+  if (countdownIntervalId !== null) {
+    clearInterval(countdownIntervalId);
+    countdownIntervalId = null;
+  }
+  state = 'countdown';
   let countDown = 5;
   overlay.classList.remove('hidden');
-  
-  const countdownInterval = setInterval(() => {
+
+  countdownIntervalId = setInterval(() => {
     if (countDown > 0) {
       overlay.innerHTML = `
         <div style="font-size: 120px; font-weight: 700; color: #fff; text-shadow: 0 0 30px rgba(255,255,255,0.5);">
@@ -425,7 +434,8 @@ function startCountdown() {
       `;
       countDown--;
     } else {
-      clearInterval(countdownInterval);
+      clearInterval(countdownIntervalId);
+      countdownIntervalId = null;
       startGame();
     }
   }, 1000);
