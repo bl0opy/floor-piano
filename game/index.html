@@ -59,6 +59,42 @@
       transform: scale(1.15);
     }
 
+    #leaderboard {
+      min-width: 120px;
+      z-index: 1;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }
+
+    #leaderboard .lb-title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      color: #c44444;
+      margin-bottom: 6px;
+    }
+
+    #leaderboard .lb-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      font-size: 15px;
+      line-height: 1.35;
+    }
+
+    #leaderboard .lb-rank {
+      color: #a03838;
+      font-weight: 600;
+      width: 1ch;
+    }
+
+    #leaderboard .lb-val {
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: #ff6464;
+      text-shadow: 0 0 12px rgba(255, 64, 64, 0.45);
+    }
+
     #game-wrap {
       position: relative;
       margin-bottom: 20px;
@@ -205,6 +241,12 @@
 <body>
 
   <div id="top-bar">
+    <div id="leaderboard" aria-label="Top scores">
+      <div class="lb-title">TOP 3</div>
+      <div class="lb-row"><span class="lb-rank">1</span><span class="lb-val" id="lb-1">—</span></div>
+      <div class="lb-row"><span class="lb-rank">2</span><span class="lb-val" id="lb-2">—</span></div>
+      <div class="lb-row"><span class="lb-rank">3</span><span class="lb-val" id="lb-3">—</span></div>
+    </div>
     <div id="title">Emanate Piano Tiles</div>
     <div id="score">0</div>
   </div>
@@ -269,6 +311,53 @@ const overlay = document.getElementById('overlay');
 const scoreEl = document.getElementById('score');
 const playBtn = document.getElementById('play-btn');
 const footBoxes = FOOT_BOX_IDS.map(id => document.getElementById(id));
+
+// ─── Leaderboard ────────────────────────────────────────────────────────────
+const LEADERBOARD_KEY = 'floor_piano_tiles_leaderboard_v1';
+const TOP_N = 3;
+let leaderboardTop = [];
+
+function loadLeaderboard() {
+  try {
+    const raw = localStorage.getItem(LEADERBOARD_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter(n => typeof n === 'number' && Number.isFinite(n))
+      .sort((a, b) => b - a)
+      .slice(0, TOP_N);
+  } catch {
+    return [];
+  }
+}
+
+function saveLeaderboard(arr) {
+  try {
+    localStorage.setItem(LEADERBOARD_KEY, JSON.stringify(arr));
+  } catch {
+    /* private mode / quota */
+  }
+}
+
+function renderLeaderboard() {
+  for (let i = 0; i < TOP_N; i++) {
+    const el = document.getElementById(`lb-${i + 1}`);
+    if (!el) continue;
+    const val = leaderboardTop[i];
+    el.textContent = val !== undefined ? String(val) : '—';
+  }
+}
+
+function mergeLeaderboard(finalScore) {
+  const merged = [...leaderboardTop, finalScore].sort((a, b) => b - a).slice(0, TOP_N);
+  leaderboardTop = merged;
+  saveLeaderboard(leaderboardTop);
+  renderLeaderboard();
+}
+
+leaderboardTop = loadLeaderboard();
+renderLeaderboard();
 
 // ─── State ──────────────────────────────────────────────────────────────────
 let state      = 'menu';   // 'menu' | 'countdown' | 'playing' | 'over'
@@ -469,6 +558,7 @@ function startGame() {
 
 function endGame() {
   state = 'over';
+  mergeLeaderboard(score);
   shakeTime = 0.35;
   playMiss();
 
