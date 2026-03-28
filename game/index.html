@@ -242,8 +242,11 @@ const TH = 120;        // tile height (shorter for widescreen)
 const HIT_Y = H - TH * 1.5; // generous hit zone starting point
 const GAP = 6;         // inner padding on tiles
 
-const SPEED_INIT = 260;  // px / second (slightly faster for widescreen)
-const SPEED_MAX  = 700;
+// Game speed multiplier (1.0 = normal, 2.0 = double speed, 0.5 = half speed)
+const GAME_SPEED_MULTIPLIER = parseFloat(new URLSearchParams(window.location.search).get('speed') || '1.0');
+
+const SPEED_INIT = 260 * GAME_SPEED_MULTIPLIER;  // px / second (slightly faster for widescreen)
+const SPEED_MAX  = 700 * GAME_SPEED_MULTIPLIER;
 const SPEED_STEP = 5;    // px/s added per point
 
 // Notes per column: C4 E4 G4 C5
@@ -278,6 +281,7 @@ let lastTime   = 0;
 let audioCtx   = null;
 let shakeTime  = 0;        // canvas shake on game-over
 let columnCooldown = [0, 0, 0, 0];  // per-column hit cooldown (100ms)
+let lastSpawnedCol = -1;   // track last spawned column to prevent consecutive duplicates
 
 // ─── WebSocket for foot detection ───────────────────────────────────────────
 let ws = null;
@@ -397,7 +401,12 @@ function refillTiles() {
   const MIN_SPAWN_THRESHOLD = -TH * 1.3;
   
   while (topTileY() > MIN_SPAWN_THRESHOLD) {
-    const col = Math.floor(Math.random() * COLS);
+    let col = Math.floor(Math.random() * COLS);
+    // Ensure consecutive tiles are different columns
+    while (col === lastSpawnedCol) {
+      col = Math.floor(Math.random() * COLS);
+    }
+    lastSpawnedCol = col;
     tiles.push({ col, y: topTileY() - TH - 20 });  // Add 20px gap between tiles
   }
 }
@@ -431,6 +440,7 @@ function startGame() {
   state   = 'playing';
   shakeTime = 0;
   columnCooldown = [0, 0, 0, 0];  // Reset per-column cooldowns
+  lastSpawnedCol = -1;  // Reset last spawned column
 
   scoreEl.textContent = '0';
   overlay.classList.add('hidden');
@@ -439,6 +449,7 @@ function startGame() {
   // Pre-fill so first tile arrives in the hit zone after ~1s
   // Place first tile at the very top; more above it
   tiles.push({ col: Math.floor(Math.random() * COLS), y: -TH });
+  lastSpawnedCol = tiles[0].col;  // Track first tile's column
   refillTiles();
 
   if (animId) cancelAnimationFrame(animId);

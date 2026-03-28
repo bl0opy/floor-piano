@@ -1,10 +1,10 @@
 {
   "camera_source": 0,
-  "sensitivity": 11,
+  "sensitivity": 44,
   "min_blob_area": 500,
   "cooldown_ms": 100,
   "jpeg_quality": 75,
   "debug_mode": false,
-  "polyphony_limit": 4,
+  "polyphony_limit": 1,
   "flip_horizontal": true
 }
