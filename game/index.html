@@ -252,9 +252,12 @@
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        font-size: 28px;
+        font-size: 13px;
         font-weight: 700;
-        letter-spacing: 2px;
+        letter-spacing: 0.5px;
+        line-height: 1.2;
+        text-align: center;
+        padding: 6px;
         transition:
           transform 0.07s,
           box-shadow 0.07s;
@@ -343,8 +346,20 @@
       const COLS = 4;
       const TW = W / COLS; // tile width = 300
       const TH = 120; // tile height (shorter for widescreen)
-      const HIT_Y = H - TH * 1.5; // generous hit zone starting point
+      const HIT_Y = H - TH * 1.5; // reference line for labels / ideal timing (visual)
       const GAP = 6; // inner padding on tiles
+      /** Top of playfield: tiles are hittable when overlapping [0, H]; line marks where that range starts (see tileOverlapsPlayfieldVertically). */
+      const CLICK_RANGE_START_Y = 2;
+
+      function tileOverlapsPlayfieldVertically(tile) {
+        return tile.y < H && tile.y + TH > 0;
+      }
+
+      function columnHasTileInRange(col) {
+        return tiles.some(
+          (t) => t.col === col && tileOverlapsPlayfieldVertically(t),
+        );
+      }
 
       // Game speed multiplier (1.0 = normal, 2.0 = double speed, 0.5 = half speed)
       const GAME_SPEED_MULTIPLIER = parseFloat(
@@ -359,6 +374,8 @@
       const FREQS = [261.63, 329.63, 392.0, 523.25];
       const KEY_MAP = { a: 0, s: 1, d: 2, f: 3 };
       const FOOT_BOX_IDS = ["fb-0", "fb-1", "fb-2", "fb-3"];
+      const FOOT_BOX_KEYS = ["A", "S", "D", "F"];
+      let footLabelPrev = ["", "", "", ""];
 
       // Column colors (bright, vibrant)
       const COL_COLORS = [
@@ -375,6 +392,24 @@
       const scoreEl = document.getElementById("score");
       const playBtn = document.getElementById("play-btn");
       const footBoxes = FOOT_BOX_IDS.map((id) => document.getElementById(id));
+
+      function resetFootBoxLabels() {
+        FOOT_BOX_KEYS.forEach((k, i) => {
+          if (footBoxes[i]) footBoxes[i].textContent = k;
+          footLabelPrev[i] = "";
+        });
+      }
+
+      function updateFootBoxLabels() {
+        if (state !== "playing") return;
+        for (let col = 0; col < COLS; col++) {
+          const next = columnHasTileInRange(col) ? "Click now" : "Wait";
+          if (footLabelPrev[col] !== next) {
+            footLabelPrev[col] = next;
+            if (footBoxes[col]) footBoxes[col].textContent = next;
+          }
+        }
+      }
 
       // ─── Leaderboard ────────────────────────────────────────────────────────────
       const LEADERBOARD_KEY = "floor_piano_tiles_leaderboard_v1";
@@ -583,6 +618,7 @@
           countdownIntervalId = null;
         }
         state = "countdown";
+        resetFootBoxLabels();
         let countDown = 5;
         overlay.classList.remove("hidden");
 
@@ -616,6 +652,7 @@
         scoreEl.textContent = "0";
         overlay.classList.add("hidden");
         footBoxes.forEach((el) => el.classList.remove("hit"));
+        footLabelPrev = ["", "", "", ""];
 
         // Pre-fill so first tile arrives in the hit zone after ~1s
         // Place first tile at the very top; more above it
@@ -630,6 +667,7 @@
 
       function endGame() {
         state = "over";
+        resetFootBoxLabels();
         mergeLeaderboard(score);
         shakeTime = 0.35;
         playMiss();
@@ -670,15 +708,12 @@
           return; // Still in cooldown
         }
 
-        // Very generous hit zone: from upper half of screen
-        const GENEROUS_HIT_Y = HIT_Y - TH * 0.8;
-
-        // Find best hittable tile in this column:
+        // Find best hittable tile in this column (any tile overlapping playfield vertically)
         let best = null,
           bestDist = Infinity;
         for (const tile of tiles) {
           if (tile.col !== col) continue;
-          if (tile.y + TH > GENEROUS_HIT_Y && tile.y < H) {
+          if (tileOverlapsPlayfieldVertically(tile)) {
             const center = tile.y + TH / 2;
             const dist = Math.abs(center - (HIT_Y + TH / 2));
             if (dist < bestDist) {
@@ -753,6 +788,7 @@
         }
 
         refillTiles();
+        updateFootBoxLabels();
         draw(dt);
       }
 
@@ -777,16 +813,15 @@
           ctx.fillRect(x, 0, TW, H);
         }
 
-        // ── Generous hit zone background ──
-        const GENEROUS_HIT_Y = HIT_Y - TH * 0.8;
+        // ── Full playfield subtle wash (hittable anywhere tile is visible) ──
         ctx.fillStyle = "rgba(255,255,255,0.03)";
-        ctx.fillRect(0, GENEROUS_HIT_Y, W, TH * 1.8);
+        ctx.fillRect(0, 0, W, H);
 
-        // ── Stricter hit zone indicator (bottom portion) ──
+        // ── Stricter band around ideal timing line (HIT_Y) ──
         ctx.fillStyle = "rgba(255,255,255,0.06)";
         ctx.fillRect(0, HIT_Y, W, TH * 1.5);
 
-        // ── Hit zone top line (subtle) ──
+        // ── Reference line at HIT_Y (subtle) ──
         ctx.strokeStyle = "#2a2a2a";
         ctx.lineWidth = 2;
         ctx.beginPath();
@@ -801,6 +836,16 @@
           ctx.beginPath();
           ctx.moveTo(i * TW, 0);
           ctx.lineTo(i * TW, H);
+          ctx.stroke();
+        }
+
+        // ── Red line: start of vertical click range (top of playfield) ──
+        if (state === "playing") {
+          ctx.strokeStyle = "#e53935";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(0, CLICK_RANGE_START_Y + 0.5);
+          ctx.lineTo(W, CLICK_RANGE_START_Y + 0.5);
           ctx.stroke();
         }
 
@@ -834,8 +879,8 @@
           ctx.fillStyle = grad;
           ctx.fillRect(x + GAP, y + GAP, TW - GAP * 2, 25);
 
-          // Highlight tile if it's in the hit zone (ready to tap)
-          if (tile.y + TH > HIT_Y && tile.y < H) {
+          // Highlight tile if it's in range (overlaps playfield vertically)
+          if (tileOverlapsPlayfieldVertically(tile)) {
             ctx.strokeStyle = `${color}`;
             ctx.lineWidth = 2;
             ctx.globalAlpha = 0.6;
