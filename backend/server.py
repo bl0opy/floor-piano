@@ -1,19 +1,19 @@
 """
 FastAPI application: REST API + MJPEG video stream + WebSocket event bus.
+Multi-region edition — each region plays its own note.
 
 Architecture decisions
 ----------------------
 - MJPEG stream keeps the frontend video element fed without WebRTC complexity.
-- WebSocket carries only lightweight JSON events (key triggers, state changes).
-- The CV pipeline runs in its own daemon thread; key-trigger callbacks are
-  forwarded to the asyncio event loop via run_coroutine_threadsafe so that
-  broadcasting to WebSocket clients is always done on the correct thread.
+- WebSocket carries only lightweight JSON events (region triggers, state changes).
+- The CV pipeline runs in its own daemon thread; callbacks are forwarded to the
+  asyncio event loop via run_coroutine_threadsafe.
 """
 
 import asyncio
 import threading
 from pathlib import Path
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 import cv2
 import numpy as np
@@ -29,7 +29,7 @@ from .config_manager import (
     save_calibration, save_settings,
 )
 from .cv_pipeline import DetectionPipeline
-from .note_mapper import DEFAULT_NOTES, NoteMapper
+from .note_mapper import ALL_NOTES, ALL_NOTES_BY_NAME, DEFAULT_NOTES
 
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 
@@ -37,10 +37,9 @@ FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 # Application-level singletons
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="Floor Piano", version="1.0.0")
+app = FastAPI(title="Floor Piano", version="2.0.0")
 
 _calibration = CalibrationManager()
-_note_mapper = NoteMapper()
 _audio = AudioEngine()
 _pipeline = DetectionPipeline(_calibration)
 _settings: Dict[str, Any] = {}
@@ -57,15 +56,10 @@ async def _startup() -> None:
     global _settings, _event_loop
     _event_loop = asyncio.get_running_loop()
 
-    # Load persisted settings and calibration
     _settings = load_settings()
     cal_data = load_calibration()
     _calibration.from_dict(cal_data)
-    _note_mapper.set_note_map(
-        _note_mapper.get_notes_for_key_count(_calibration.num_keys)
-    )
 
-    # Audio: initialise and pre-generate tones in a background thread
     _audio.initialize()
     threading.Thread(
         target=_audio.preload_notes,
@@ -74,9 +68,10 @@ async def _startup() -> None:
         name="audio-preload",
     ).start()
 
-    # CV pipeline
     _pipeline.configure(_settings)
-    _pipeline.on_key_triggered = _on_key_triggered
+    _pipeline.on_region_entered = _on_region_entered
+    _pipeline.on_region_exited = _on_region_exited
+    _pipeline.on_key_triggered = None
 
     src = _settings.get("camera_source", 0)
     if isinstance(src, str) and src.isdigit():
@@ -93,21 +88,43 @@ async def _shutdown() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Key-trigger callback (called from CV thread)
+# Region enter/exit callbacks (called from CV thread)
 # ---------------------------------------------------------------------------
 
-def _on_key_triggered(key_index: int) -> None:
-    note = _note_mapper.get_note_for_key(key_index)
+def _on_region_entered(region_index: int) -> None:
+    """Start the note assigned to the entered region and broadcast an event."""
+    if region_index >= len(_calibration.regions):
+        return
+    note_name = _calibration.regions[region_index].note
+    note = ALL_NOTES_BY_NAME.get(note_name)
     if note:
-        _audio.play_note(note["name"], note["frequency"])
+        _audio.note_on(note["name"], note["frequency"])
 
     event = {
         "type": "key_triggered",
-        "key_index": key_index,
-        "note_name": note["name"] if note else "?",
-        "note_label": note["label"] if note else "?",
+        "region_index": region_index,
+        "note_name": note_name,
+        "note_label": note["label"] if note else note_name,
     }
+    if _event_loop and _event_loop.is_running():
+        asyncio.run_coroutine_threadsafe(_broadcast(event), _event_loop)
 
+
+def _on_region_exited(region_index: int) -> None:
+    """Release the note assigned to the exited region and broadcast an event."""
+    if region_index >= len(_calibration.regions):
+        return
+    note_name = _calibration.regions[region_index].note
+    note = ALL_NOTES_BY_NAME.get(note_name)
+    if note:
+        _audio.note_off(note["name"])
+
+    event = {
+        "type": "key_released",
+        "region_index": region_index,
+        "note_name": note_name,
+        "note_label": note["label"] if note else note_name,
+    }
     if _event_loop and _event_loop.is_running():
         asyncio.run_coroutine_threadsafe(_broadcast(event), _event_loop)
 
@@ -134,16 +151,18 @@ async def index() -> HTMLResponse:
     return HTMLResponse((FRONTEND_DIR / "index.html").read_text())
 
 
+@app.get("/game", response_class=HTMLResponse)
+async def game() -> HTMLResponse:
+    game_file = Path(__file__).parent.parent / "game" / "index.html"
+    return HTMLResponse(game_file.read_text())
+
+
 # ---------------------------------------------------------------------------
 # MJPEG video stream
 # ---------------------------------------------------------------------------
 
 @app.get("/video_feed")
 async def video_feed() -> StreamingResponse:
-    """
-    Pushes annotated JPEG frames as a multipart/x-mixed-replace stream.
-    Most browsers handle this natively in an <img> tag.
-    """
     async def _frames():
         blank = _make_blank_frame()
         try:
@@ -159,7 +178,7 @@ async def video_feed() -> StreamingResponse:
                 )
                 await asyncio.sleep(1 / 30)
         except asyncio.CancelledError:
-            pass   # client disconnected
+            pass
 
     return StreamingResponse(
         _frames(),
@@ -184,14 +203,12 @@ async def ws_endpoint(websocket: WebSocket) -> None:
     await websocket.accept()
     _clients.add(websocket)
 
-    # Send full initial state so the client can render correctly on (re)connect
     await websocket.send_json({
         "type": "state",
         **_pipeline.get_state(),
         "calibrated": _calibration.is_calibrated,
-        "num_keys": _calibration.num_keys,
-        "region_points": _calibration.region_points,
-        "notes": _note_mapper.all_notes(),
+        "regions": _calibration.to_dict()["regions"],
+        "available_notes": ALL_NOTES,
         "settings": _settings,
     })
 
@@ -217,41 +234,53 @@ async def api_state() -> Dict:
     return {
         **_pipeline.get_state(),
         "calibrated": _calibration.is_calibrated,
-        "num_keys": _calibration.num_keys,
-        "region_points": _calibration.region_points,
-        "notes": _note_mapper.all_notes(),
+        "regions": _calibration.to_dict()["regions"],
+        "available_notes": ALL_NOTES,
         "settings": _settings,
     }
 
 
+# ---------- Notes ----------
+
+@app.get("/api/notes")
+async def api_notes() -> List:
+    return ALL_NOTES
+
+
 # ---------- Calibration ----------
 
+class RegionPayload(BaseModel):
+    points: list   # [[x,y], [x,y], [x,y], [x,y]]
+    note: str
+
+
 class CalibrationPayload(BaseModel):
-    region_points: list   # [[x,y], [x,y], [x,y], [x,y]]
-    num_keys: int
+    regions: List[RegionPayload]
 
 
 @app.post("/api/calibration")
 async def api_save_calibration(payload: CalibrationPayload) -> Dict:
-    ok = _calibration.set_region(payload.region_points, payload.num_keys)
+    region_list = [{"points": r.points, "note": r.note} for r in payload.regions]
+    ok = _calibration.set_regions(region_list)
     if not ok:
         return JSONResponse(
-            {"success": False, "error": "Need exactly 4 region points"},
+            {"success": False, "error": "Need 1–4 regions, each with exactly 4 points"},
             status_code=400,
         )
-    notes = _note_mapper.get_notes_for_key_count(payload.num_keys)
-    _note_mapper.set_note_map(notes)
-    threading.Thread(target=_audio.preload_notes, args=(notes,), daemon=True).start()
 
     save_calibration(_calibration.to_dict())
+
+    # Preload the notes used by the saved regions
+    notes_used = {r.note for r in _calibration.regions}
+    notes_to_preload = [n for n in ALL_NOTES if n["name"] in notes_used]
+    threading.Thread(target=_audio.preload_notes, args=(notes_to_preload,), daemon=True).start()
 
     await _broadcast({
         "type": "calibration_updated",
         "calibrated": True,
-        "num_keys": payload.num_keys,
-        "notes": notes,
+        "regions": _calibration.to_dict()["regions"],
     })
-    return {"success": True, "num_keys": payload.num_keys}
+    return {"success": True, "num_regions": len(_calibration.regions)}
 
 
 @app.get("/api/calibration")
@@ -261,11 +290,9 @@ async def api_get_calibration() -> Dict:
 
 @app.delete("/api/calibration")
 async def api_clear_calibration() -> Dict:
-    _calibration.region_points = []
-    _calibration.is_calibrated = False
-    _calibration.homography = None
+    _calibration.regions = []
     save_calibration(_calibration.to_dict())
-    await _broadcast({"type": "calibration_updated", "calibrated": False})
+    await _broadcast({"type": "calibration_updated", "calibrated": False, "regions": []})
     return {"success": True}
 
 
@@ -294,8 +321,7 @@ async def api_save_settings(payload: SettingsPayload) -> Dict:
     _pipeline.configure(_settings)
     save_settings(_settings)
 
-    restart_cam = "camera_source" in update
-    if restart_cam:
+    if "camera_source" in update:
         src = update["camera_source"]
         if isinstance(src, str) and src.isdigit():
             src = int(src)
@@ -324,7 +350,6 @@ async def api_detection_stop() -> Dict:
 
 @app.post("/api/detection/reset_background")
 async def api_reset_background() -> Dict:
-    """Force the background model to re-learn the current scene."""
     was_on = _pipeline._detection_enabled
     _pipeline.enable_detection(False)
     await asyncio.sleep(0.05)

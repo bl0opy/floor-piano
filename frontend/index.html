@@ -17,29 +17,23 @@
 <!-- ===== Main layout ================================================= -->
 <main class="layout">
 
-  <!-- ---- Left column: video + calibration toolbar ---- -->
+  <!-- ---- Left column: video + region toolbar ---- -->
   <section class="video-section">
 
     <div id="video-container">
-      <!-- MJPEG stream -->
       <img id="video-feed" src="/video_feed" alt="Camera feed" />
-      <!-- Canvas overlaid exactly on top for calibration drawing -->
       <canvas id="overlay-canvas"></canvas>
-      <!-- Active-key pop-up -->
       <div id="key-pop" class="key-pop hidden"></div>
     </div>
 
-    <!-- Calibration toolbar (always visible, greyed out when not in cal mode) -->
+    <!-- Region drawing toolbar -->
     <div class="cal-toolbar">
-      <button id="btn-cal-toggle" class="btn btn-primary">Calibrate</button>
-      <button id="btn-cal-clear"  class="btn btn-secondary">Clear Points</button>
-      <label class="inline-label">
-        Keys
-        <input id="num-keys" type="number" min="1" max="24" value="8" class="input-sm" />
-      </label>
-      <button id="btn-cal-save"  class="btn btn-success" disabled>Save Calibration</button>
-      <button id="btn-cal-delete" class="btn btn-danger">Delete Calibration</button>
-      <span id="cal-hint" class="cal-hint">Enter calibration mode, then click 4 corners of the floor region.</span>
+      <button id="btn-add-region"   class="btn btn-primary">+ Add Region</button>
+      <button id="btn-cancel-draw"  class="btn btn-warn hidden">✕ Cancel</button>
+      <button id="btn-clear-all"    class="btn btn-secondary">Clear All</button>
+      <button id="btn-cal-save"     class="btn btn-success" disabled>Save Regions</button>
+      <button id="btn-cal-delete"   class="btn btn-danger">Delete Saved</button>
+      <span id="cal-hint" class="cal-hint">Click "+ Add Region", then click 4 corners on the video to define a detection zone.</span>
     </div>
 
   </section>
@@ -57,20 +51,22 @@
       <button id="btn-reset-bg" class="btn btn-secondary full-width mt-8">
         Reset Background Model
       </button>
-      <p class="note">After placing the camera, click Start. Wait 2–3 s for the background to stabilise, then step on the keys.</p>
+      <p class="note">After placing the camera, click Start. Wait 2–3 s for the background to stabilise, then step on the regions.</p>
     </div>
 
-    <!-- Active key display -->
+    <!-- Active note display -->
     <div class="card card-highlight">
-      <h3>Active Key</h3>
+      <h3>Active Note</h3>
       <div id="active-key-display" class="active-key-display">—</div>
       <div id="active-note-display" class="active-note-display">—</div>
     </div>
 
-    <!-- Piano key map (rendered dynamically) -->
+    <!-- Region list -->
     <div class="card">
-      <h3>Key Map</h3>
-      <div id="key-map" class="key-map"></div>
+      <h3>Regions <span id="region-count" class="region-count">0 / 4</span></h3>
+      <div id="region-list" class="region-list">
+        <p class="note" id="region-empty-hint">No regions yet. Click "+ Add Region" to draw one.</p>
+      </div>
     </div>
 
     <!-- Settings -->
@@ -100,13 +96,13 @@
 
       <label class="setting-row">
         <span>Polyphony limit</span>
-        <input id="setting-polyphony" type="number" min="1" max="10" value="2" class="input-sm"
-               title="Max simultaneous detections (notes) per frame" />
+        <input id="setting-polyphony" type="number" min="1" max="4" value="4" class="input-sm"
+               title="Max simultaneous region triggers per frame" />
       </label>
 
       <label class="setting-row">
         <span>Flip camera horizontally</span>
-        <input id="setting-flip" type="checkbox" class="toggle" title="Mirror the camera feed left–right" />
+        <input id="setting-flip" type="checkbox" class="toggle" />
       </label>
 
       <button id="btn-save-settings" class="btn btn-primary full-width mt-8">

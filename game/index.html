@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Emanate Piano Tiles</title>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0d0d0d;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      color: #fff;
+      user-select: none;
+      overflow: hidden;
+      padding: 20px;
+    }
+
+    /* Top bar with title and score */
+    #top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      max-width: 1200px;
+      margin-bottom: 20px;
+      padding: 0 20px;
+      position: relative;
+    }
+
+    #title {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: 3px;
+      text-shadow: 0 0 20px rgba(255, 255, 255, 0.3);
+    }
+
+    #score {
+      font-size: 48px;
+      font-weight: 700;
+      letter-spacing: 4px;
+      color: #fff;
+      min-width: 5ch;
+      text-align: right;
+      text-shadow: 0 0 20px rgba(255, 255, 255, 0.3);
+      transition: transform 0.08s ease-out;
+      margin-left: auto;
+    }
+
+    #score.pop {
+      transform: scale(1.15);
+    }
+
+    #leaderboard {
+      min-width: 120px;
+      z-index: 1;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }
+
+    #leaderboard .lb-title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      color: #c44444;
+      margin-bottom: 6px;
+    }
+
+    #leaderboard .lb-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      font-size: 15px;
+      line-height: 1.35;
+    }
+
+    #leaderboard .lb-rank {
+      color: #a03838;
+      font-weight: 600;
+      width: 1ch;
+    }
+
+    #leaderboard .lb-val {
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: #ff6464;
+      text-shadow: 0 0 12px rgba(255, 64, 64, 0.45);
+    }
+
+    #game-wrap {
+      position: relative;
+      margin-bottom: 20px;
+    }
+
+    canvas {
+      display: block;
+      border-radius: 4px;
+      box-shadow: 0 0 40px rgba(0, 0, 0, 0.8);
+    }
+
+    /* Overlay (menu / game over) */
+    #overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(6px);
+      border-radius: 4px;
+      transition: opacity 0.2s;
+      z-index: 100;
+    }
+
+    #overlay.hidden {
+      display: none;
+    }
+
+    #overlay h1 {
+      font-size: 56px;
+      font-weight: 700;
+      letter-spacing: 4px;
+      margin-bottom: 15px;
+      text-shadow: 0 0 40px rgba(255, 255, 255, 0.3);
+    }
+
+    #overlay .subtitle {
+      font-size: 16px;
+      color: #888;
+      letter-spacing: 2px;
+      margin-bottom: 10px;
+    }
+
+    #overlay .final-score {
+      font-size: 72px;
+      font-weight: 700;
+      color: #fff;
+      margin: 10px 0 35px;
+    }
+
+    #overlay .keys-hint {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 35px;
+    }
+
+    .key-chip {
+      width: 50px;
+      height: 50px;
+      border: 2px solid #555;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      font-weight: 700;
+      color: #aaa;
+      background: #1a1a1a;
+    }
+
+    #play-btn {
+      padding: 16px 60px;
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 4px;
+      background: #fff;
+      color: #0d0d0d;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      text-transform: uppercase;
+      transition: background 0.15s, transform 0.1s;
+    }
+
+    #play-btn:hover { background: #ddd; transform: scale(1.03); }
+    #play-btn:active { transform: scale(0.97); }
+
+    /* Bottom foot boxes */
+    #foot-boxes {
+      display: flex;
+      gap: 16px;
+      width: 100%;
+      max-width: 1200px;
+    }
+
+    .foot-box {
+      flex: 1;
+      aspect-ratio: 1;
+      border-radius: 12px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      transition: transform 0.07s, box-shadow 0.07s;
+      border: 3px solid;
+      cursor: pointer;
+    }
+
+    .foot-box.col-0 {
+      background: rgba(255, 64, 64, 0.15);
+      border-color: #ff4040;
+      color: #ff6464;
+    }
+
+    .foot-box.col-1 {
+      background: rgba(64, 144, 255, 0.15);
+      border-color: #4090ff;
+      color: #6ab7ff;
+    }
+
+    .foot-box.col-2 {
+      background: rgba(64, 255, 128, 0.15);
+      border-color: #40ff80;
+      color: #60ff99;
+    }
+
+    .foot-box.col-3 {
+      background: rgba(255, 200, 64, 0.15);
+      border-color: #ffc840;
+      color: #ffd966;
+    }
+
+    .foot-box.hit {
+      transform: scale(0.95);
+      box-shadow: inset 0 0 20px currentColor;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="top-bar">
+    <div id="leaderboard" aria-label="Top scores">
+      <div class="lb-title">TOP 3</div>
+      <div class="lb-row"><span class="lb-rank">1</span><span class="lb-val" id="lb-1">—</span></div>
+      <div class="lb-row"><span class="lb-rank">2</span><span class="lb-val" id="lb-2">—</span></div>
+      <div class="lb-row"><span class="lb-rank">3</span><span class="lb-val" id="lb-3">—</span></div>
+    </div>
+    <div id="title">Emanate Piano Tiles</div>
+    <div id="score">0</div>
+  </div>
+
+  <div id="game-wrap">
+    <canvas id="game" width="1200" height="600"></canvas>
+
+    <div id="overlay">
+      <h1>EMANATE PIANO TILES</h1>
+      <div class="keys-hint">
+        <div class="key-chip">A</div>
+        <div class="key-chip">S</div>
+        <div class="key-chip">D</div>
+        <div class="key-chip">F</div>
+      </div>
+      <div class="subtitle">TAP THE FALLING TILES FROM YOUR FEET</div>
+      <div class="subtitle" style="margin-bottom:35px">MISCLICKS LOSE • DON'T MISS A TILE • HAVE FUN!</div>
+      <button id="play-btn">PLAY</button>
+    </div>
+  </div>
+
+  <div id="foot-boxes">
+    <div class="foot-box col-0" id="fb-0">A</div>
+    <div class="foot-box col-1" id="fb-1">S</div>
+    <div class="foot-box col-2" id="fb-2">D</div>
+    <div class="foot-box col-3" id="fb-3">F</div>
+  </div>
+
+<script>
+// ─── Config ─────────────────────────────────────────────────────────────────
+const W = 1200, H = 600;
+const COLS = 4;
+const TW = W / COLS;   // tile width = 300
+const TH = 120;        // tile height (shorter for widescreen)
+const HIT_Y = H - TH * 1.5; // generous hit zone starting point
+const GAP = 6;         // inner padding on tiles
+
+// Game speed multiplier (1.0 = normal, 2.0 = double speed, 0.5 = half speed)
+const GAME_SPEED_MULTIPLIER = parseFloat(new URLSearchParams(window.location.search).get('speed') || '1.0');
+
+const SPEED_INIT = 260 * GAME_SPEED_MULTIPLIER;  // px / second (slightly faster for widescreen)
+const SPEED_MAX  = 700 * GAME_SPEED_MULTIPLIER;
+const SPEED_STEP = 5;    // px/s added per point
+
+// Notes per column: C4 E4 G4 C5
+const FREQS = [261.63, 329.63, 392.00, 523.25];
+const KEY_MAP = { a: 0, s: 1, d: 2, f: 3 };
+const FOOT_BOX_IDS = ['fb-0', 'fb-1', 'fb-2', 'fb-3'];
+
+// Column colors (bright, vibrant)
+const COL_COLORS = [
+  { hex: '#ff4040', rgb: 'rgb(255, 64, 64)' },    // Bright red
+  { hex: '#4090ff', rgb: 'rgb(64, 144, 255)' },   // Bright blue
+  { hex: '#40ff80', rgb: 'rgb(64, 255, 128)' },   // Bright green
+  { hex: '#ffc840', rgb: 'rgb(255, 200, 64)' }    // Bright yellow
+];
+
+// ─── DOM ────────────────────────────────────────────────────────────────────
+const canvas  = document.getElementById('game');
+const ctx     = canvas.getContext('2d');
+const overlay = document.getElementById('overlay');
+const scoreEl = document.getElementById('score');
+const playBtn = document.getElementById('play-btn');
+const footBoxes = FOOT_BOX_IDS.map(id => document.getElementById(id));
+
+// ─── Leaderboard ────────────────────────────────────────────────────────────
+const LEADERBOARD_KEY = 'floor_piano_tiles_leaderboard_v1';
+const TOP_N = 3;
+let leaderboardTop = [];
+
+function loadLeaderboard() {
+  try {
+    const raw = localStorage.getItem(LEADERBOARD_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter(n => typeof n === 'number' && Number.isFinite(n))
+      .sort((a, b) => b - a)
+      .slice(0, TOP_N);
+  } catch {
+    return [];
+  }
+}
+
+function saveLeaderboard(arr) {
+  try {
+    localStorage.setItem(LEADERBOARD_KEY, JSON.stringify(arr));
+  } catch {
+    /* private mode / quota */
+  }
+}
+
+function renderLeaderboard() {
+  for (let i = 0; i < TOP_N; i++) {
+    const el = document.getElementById(`lb-${i + 1}`);
+    if (!el) continue;
+    const val = leaderboardTop[i];
+    el.textContent = val !== undefined ? String(val) : '—';
+  }
+}
+
+function mergeLeaderboard(finalScore) {
+  const merged = [...leaderboardTop, finalScore].sort((a, b) => b - a).slice(0, TOP_N);
+  leaderboardTop = merged;
+  saveLeaderboard(leaderboardTop);
+  renderLeaderboard();
+}
+
+leaderboardTop = loadLeaderboard();
+renderLeaderboard();
+
+// ─── State ──────────────────────────────────────────────────────────────────
+let state      = 'menu';   // 'menu' | 'countdown' | 'playing' | 'over'
+let countdownIntervalId = null;
+let tiles      = [];
+let flashes    = [];       // { x, y, alpha }
+let score      = 0;
+let speed      = SPEED_INIT;
+let animId     = null;
+let lastTime   = 0;
+let audioCtx   = null;
+let shakeTime  = 0;        // canvas shake on game-over
+let columnCooldown = [0, 0, 0, 0];  // per-column hit cooldown (100ms)
+let lastSpawnedCol = -1;   // track last spawned column to prevent consecutive duplicates
+
+// ─── WebSocket for foot detection ───────────────────────────────────────────
+let ws = null;
+const activeFootKeys = new Set();  // Track which keys are currently pressed by feet
+
+function connectWebSocket() {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${protocol}//${window.location.host}/ws`;
+  
+  ws = new WebSocket(wsUrl);
+  
+  ws.onopen = () => {
+    console.log('[Piano Tiles] Connected to foot detection');
+  };
+  
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    
+    if (msg.type === 'key_triggered') {
+      // Map region_index (0-3) to keyboard keys (A-S-D-F)
+      const keys = ['a', 's', 'd', 'f'];
+      const key = keys[msg.region_index];
+      if (!key) return;
+
+      if (state === 'playing') {
+        activeFootKeys.add(key);
+        simulateKeyPress(key);
+      } else if (state === 'menu' || state === 'over') {
+        startCountdown();
+      }
+    } else if (msg.type === 'key_released') {
+      const keys = ['a', 's', 'd', 'f'];
+      const key = keys[msg.region_index];
+      if (key) {
+        activeFootKeys.delete(key);
+      }
+    }
+  };
+  
+  ws.onerror = (error) => {
+    console.error('[Piano Tiles] WebSocket error:', error);
+  };
+  
+  ws.onclose = () => {
+    console.log('[Piano Tiles] Disconnected from foot detection');
+    // Attempt to reconnect every 3 seconds
+    setTimeout(connectWebSocket, 3000);
+  };
+}
+
+function simulateKeyPress(key) {
+  // Simulate a keyboard press event for the game logic
+  const event = new KeyboardEvent('keydown', {
+    key: key,
+    code: key.toUpperCase(),
+    bubbles: true,
+  });
+  document.dispatchEvent(event);
+}
+
+// ─── Audio ──────────────────────────────────────────────────────────────────
+function initAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function playNote(freq) {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const osc  = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+
+  // Soft triangle + octave up for brightness
+  const osc2  = audioCtx.createOscillator();
+  const gain2 = audioCtx.createGain();
+
+  osc.type  = 'triangle';
+  osc.frequency.setValueAtTime(freq, t);
+  gain.gain.setValueAtTime(0.0, t);
+  gain.gain.linearRampToValueAtTime(0.45, t + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.9);
+
+  osc2.type = 'sine';
+  osc2.frequency.setValueAtTime(freq * 2, t);
+  gain2.gain.setValueAtTime(0.0, t);
+  gain2.gain.linearRampToValueAtTime(0.12, t + 0.005);
+  gain2.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+
+  osc.connect(gain);   gain.connect(audioCtx.destination);
+  osc2.connect(gain2); gain2.connect(audioCtx.destination);
+  osc.start(t);  osc.stop(t + 0.9);
+  osc2.start(t); osc2.stop(t + 0.5);
+}
+
+function playMiss() {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const osc  = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(90, t);
+  osc.frequency.linearRampToValueAtTime(50, t + 0.25);
+  gain.gain.setValueAtTime(0.35, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+  osc.connect(gain); gain.connect(audioCtx.destination);
+  osc.start(t); osc.stop(t + 0.3);
+}
+
+// ─── Tile management ────────────────────────────────────────────────────────
+function topTileY() {
+  if (tiles.length === 0) return H;
+  return Math.min(...tiles.map(t => t.y));
+}
+
+function refillTiles() {
+  // Spawn tiles more gradually - only when top tile is near screen top
+  // Keep minimum spacing of ~TH*1.3 between spawns to avoid rapid succession
+  const MIN_SPAWN_THRESHOLD = -TH * 1.3;
+  
+  while (topTileY() > MIN_SPAWN_THRESHOLD) {
+    let col = Math.floor(Math.random() * COLS);
+    // Ensure consecutive tiles are different columns
+    while (col === lastSpawnedCol) {
+      col = Math.floor(Math.random() * COLS);
+    }
+    lastSpawnedCol = col;
+    tiles.push({ col, y: topTileY() - TH - 20 });  // Add 20px gap between tiles
+  }
+}
+
+// ─── Game lifecycle ──────────────────────────────────────────────────────────
+function startCountdown() {
+  if (countdownIntervalId !== null) {
+    clearInterval(countdownIntervalId);
+    countdownIntervalId = null;
+  }
+  state = 'countdown';
+  let countDown = 5;
+  overlay.classList.remove('hidden');
+
+  countdownIntervalId = setInterval(() => {
+    if (countDown > 0) {
+      overlay.innerHTML = `
+        <div style="font-size: 120px; font-weight: 700; color: #fff; text-shadow: 0 0 30px rgba(255,255,255,0.5);">
+          ${countDown}
+        </div>
+      `;
+      countDown--;
+    } else {
+      clearInterval(countdownIntervalId);
+      countdownIntervalId = null;
+      startGame();
+    }
+  }, 1000);
+}
+
+function startGame() {
+  initAudio();
+  tiles   = [];
+  flashes = [];
+  score   = 0;
+  speed   = SPEED_INIT;
+  state   = 'playing';
+  shakeTime = 0;
+  columnCooldown = [0, 0, 0, 0];  // Reset per-column cooldowns
+  lastSpawnedCol = -1;  // Reset last spawned column
+
+  scoreEl.textContent = '0';
+  overlay.classList.add('hidden');
+  footBoxes.forEach(el => el.classList.remove('hit'));
+
+  // Pre-fill so first tile arrives in the hit zone after ~1s
+  // Place first tile at the very top; more above it
+  tiles.push({ col: Math.floor(Math.random() * COLS), y: -TH });
+  lastSpawnedCol = tiles[0].col;  // Track first tile's column
+  refillTiles();
+
+  if (animId) cancelAnimationFrame(animId);
+  lastTime = performance.now();
+  animId = requestAnimationFrame(loop);
+}
+
+function endGame() {
+  state = 'over';
+  mergeLeaderboard(score);
+  shakeTime = 0.35;
+  playMiss();
+
+  setTimeout(() => {
+    overlay.classList.remove('hidden');
+    overlay.innerHTML = `
+      <h1>GAME OVER</h1>
+      <div class="subtitle">FINAL SCORE</div>
+      <div class="final-score">${score}</div>
+      <button id="play-btn" onclick="startCountdown()"
+        style="padding:14px 52px;font-size:18px;font-weight:700;letter-spacing:3px;
+               background:#fff;color:#0d0d0d;border:none;border-radius:6px;
+               cursor:pointer;text-transform:uppercase;">
+        RETRY
+      </button>
+    `;
+  }, 320);
+}
+
+// ─── Input ───────────────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (state !== 'playing') return;
+  const col = KEY_MAP[e.key.toLowerCase()];
+  if (col === undefined) return;
+  e.preventDefault();
+
+  // Check per-column cooldown (80ms for more forgiving gameplay)
+  const now = performance.now();
+  if (now - columnCooldown[col] < 80) {
+    return;  // Still in cooldown
+  }
+
+  // Very generous hit zone: from upper half of screen
+  const GENEROUS_HIT_Y = HIT_Y - TH * 0.8;
+  
+  // Find best hittable tile in this column:
+  let best = null, bestDist = Infinity;
+  for (const tile of tiles) {
+    if (tile.col !== col) continue;
+    if (tile.y + TH > GENEROUS_HIT_Y && tile.y < H) {
+      const center = tile.y + TH / 2;
+      const dist   = Math.abs(center - (HIT_Y + TH / 2));
+      if (dist < bestDist) { bestDist = dist; best = tile; }
+    }
+  }
+
+  if (best) {
+    // ✓ Hit
+    columnCooldown[col] = now;  // Set cooldown
+    score++;
+    speed = Math.min(SPEED_INIT + score * SPEED_STEP, SPEED_MAX);
+    scoreEl.textContent = score;
+
+    // Score pop animation
+    scoreEl.classList.remove('pop');
+    void scoreEl.offsetWidth; // reflow
+    scoreEl.classList.add('pop');
+
+    // Flash effect at tile position
+    flashes.push({ x: best.col * TW + GAP, y: best.y + GAP,
+                   w: TW - GAP*2, h: TH - GAP*2, alpha: 1 });
+
+    // Remove tile
+    tiles = tiles.filter(t => t !== best);
+    refillTiles();
+
+    // Play note
+    playNote(FREQS[col]);
+
+    // Foot box feedback (brighter/punchier)
+    footBoxes[col].classList.add('hit');
+    setTimeout(() => footBoxes[col].classList.remove('hit'), 100);
+
+  } else {
+    // ✗ Misclick → game over
+    endGame();
+  }
+});
+
+// ─── Game loop ───────────────────────────────────────────────────────────────
+function loop(now) {
+  animId = requestAnimationFrame(loop);
+  if (state !== 'playing') return;
+
+  const dt = Math.min((now - lastTime) / 1000, 0.05); // cap at 50ms
+  lastTime = now;
+
+  // Move tiles
+  const dy = speed * dt;
+  for (const tile of tiles) tile.y += dy;
+
+  // Decay flash effects
+  for (const f of flashes) f.alpha -= dt * 4;
+  flashes = flashes.filter(f => f.alpha > 0);
+
+  // Decay shake
+  if (shakeTime > 0) shakeTime = Math.max(0, shakeTime - dt);
+
+  // Miss check: any unhit tile fully below canvas?
+  for (const tile of tiles) {
+    if (tile.y > H) { endGame(); return; }
+  }
+
+  refillTiles();
+  draw(dt);
+}
+
+// ─── Render ──────────────────────────────────────────────────────────────────
+function draw() {
+  const shake = shakeTime > 0
+    ? Math.sin(shakeTime * 80) * 8 * (shakeTime / 0.35)
+    : 0;
+
+  ctx.save();
+  ctx.translate(shake, 0);
+
+  // ── Background ──
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, W, H);
+
+  // ── Column backgrounds with colors ──
+  for (let i = 0; i < COLS; i++) {
+    const x = i * TW;
+    ctx.fillStyle = COL_COLORS[i].rgb.replace('rgb', 'rgba').replace(')', ', 0.06)');
+    ctx.fillRect(x, 0, TW, H);
+  }
+
+  // ── Generous hit zone background ──
+  const GENEROUS_HIT_Y = HIT_Y - TH * 0.8;
+  ctx.fillStyle = 'rgba(255,255,255,0.03)';
+  ctx.fillRect(0, GENEROUS_HIT_Y, W, TH * 1.8);
+
+  // ── Stricter hit zone indicator (bottom portion) ──
+  ctx.fillStyle = 'rgba(255,255,255,0.06)';
+  ctx.fillRect(0, HIT_Y, W, TH * 1.5);
+
+  // ── Hit zone top line (subtle) ──
+  ctx.strokeStyle = '#2a2a2a';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, HIT_Y);
+  ctx.lineTo(W, HIT_Y);
+  ctx.stroke();
+
+  // ── Column dividers ──
+  for (let i = 1; i < COLS; i++) {
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(i * TW, 0);
+    ctx.lineTo(i * TW, H);
+    ctx.stroke();
+  }
+
+  // ── Flash effects (tile hit glow) ──
+  for (const f of flashes) {
+    const a = Math.max(0, f.alpha);
+    ctx.fillStyle = `rgba(255, 255, 255, ${a * 0.9})`;
+    ctx.fillRect(f.x, f.y, f.w, f.h);
+  }
+
+  // ── Tiles with column colors ──
+  for (const tile of tiles) {
+    const x = tile.col * TW;
+    const y = tile.y;
+    const color = COL_COLORS[tile.col].hex;
+
+    // Main tile body with color
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.85;
+    ctx.fillRect(x + GAP, y + GAP, TW - GAP*2, TH - GAP*2);
+    ctx.globalAlpha = 1.0;
+
+    // Darker inner shadow
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.fillRect(x + GAP, y + GAP, TW - GAP*2, TH - GAP*2);
+
+    // Subtle highlight on top
+    const grad = ctx.createLinearGradient(0, y + GAP, 0, y + GAP + 25);
+    grad.addColorStop(0, `rgba(255, 255, 255, 0.15)`);
+    grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(x + GAP, y + GAP, TW - GAP*2, 25);
+
+    // Highlight tile if it's in the hit zone (ready to tap)
+    if (tile.y + TH > HIT_Y && tile.y < H) {
+      ctx.strokeStyle = `${color}`;
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.6;
+      ctx.strokeRect(x + GAP + 1, y + GAP + 1, TW - GAP*2 - 2, TH - GAP*2 - 2);
+      ctx.globalAlpha = 1.0;
+    }
+  }
+
+  // ── Column indicators in hit zone ──
+  const labels = ['A', 'S', 'D', 'F'];
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `bold 28px 'Segoe UI', monospace`;
+  for (let i = 0; i < COLS; i++) {
+    const color = COL_COLORS[i].hex;
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.4;
+    ctx.fillText(labels[i], i * TW + TW / 2, HIT_Y + TH / 2);
+    ctx.globalAlpha = 1.0;
+  }
+
+  // ── Bottom edge line ──
+  ctx.strokeStyle = '#1a1a1a';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(0, H - 2);
+  ctx.lineTo(W, H - 2);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+// ─── Initial render ───────────────────────────────────────────────────────────
+(function initDraw() {
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, W, H);
+
+  // Fill with column colors
+  for (let i = 0; i < COLS; i++) {
+    ctx.fillStyle = COL_COLORS[i].rgb.replace('rgb', 'rgba').replace(')', ', 0.06)');
+    ctx.fillRect(i * TW, 0, TW, H);
+  }
+
+  // Column dividers
+  ctx.strokeStyle = '#1a1a1a';
+  ctx.lineWidth = 3;
+  for (let i = 1; i < COLS; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * TW, 0);
+    ctx.lineTo(i * TW, H);
+    ctx.stroke();
+  }
+  
+  lastTime = performance.now();
+  animId = requestAnimationFrame(loop);
+
+  // Connect to foot detection WebSocket
+  connectWebSocket();
+})();
+
+playBtn.addEventListener('click', startCountdown);
+</script>
+</body>
+</html>

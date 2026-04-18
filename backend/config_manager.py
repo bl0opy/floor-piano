@@ -54,7 +54,7 @@ def load_calibration() -> Dict[str, Any]:
                 return json.load(f)
         except (json.JSONDecodeError, OSError) as e:
             print(f"[Config] Warning: could not read calibration.json: {e}")
-    return {"region_points": [], "num_keys": 8, "homography": None}
+    return {"regions": []}
 
 
 def save_calibration(calibration: Dict[str, Any]) -> None:
