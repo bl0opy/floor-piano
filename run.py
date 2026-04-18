@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """
+
+Run this file to start!
+
 Entry point for the Floor Piano application.
 
 Usage:
