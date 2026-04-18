@@ -1,119 +1,171 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Floor Piano</title>
-  <link rel="stylesheet" href="/static/css/style.css" />
-</head>
-<body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Floor Piano</title>
+    <link rel="stylesheet" href="/static/css/style.css" />
+  </head>
+  <body>
+    <!-- ===== Top bar ===================================================== -->
+    <header class="topbar">
+      <span class="logo">🎹 Floor Piano</span>
+      <span id="ws-status" class="badge badge-off">Disconnected</span>
+    </header>
 
-<!-- ===== Top bar ===================================================== -->
-<header class="topbar">
-  <span class="logo">🎹 Floor Piano</span>
-  <span id="ws-status" class="badge badge-off">Disconnected</span>
-</header>
+    <!-- ===== Main layout ================================================= -->
+    <main class="layout">
+      <!-- ---- Left column: video + region toolbar ---- -->
+      <section class="video-section">
+        <div id="video-container">
+          <img id="video-feed" src="/video_feed" alt="Camera feed" />
+          <canvas id="overlay-canvas"></canvas>
+          <div id="key-pop" class="key-pop hidden"></div>
+        </div>
 
-<!-- ===== Main layout ================================================= -->
-<main class="layout">
+        <!-- Region drawing toolbar -->
+        <div class="cal-toolbar">
+          <button id="btn-add-region" class="btn btn-primary">
+            + Add Region
+          </button>
+          <button id="btn-cancel-draw" class="btn btn-warn hidden">
+            ✕ Cancel
+          </button>
+          <button id="btn-clear-all" class="btn btn-secondary">
+            Clear All
+          </button>
+          <button id="btn-cal-save" class="btn btn-success" disabled>
+            Save Regions
+          </button>
+          <button id="btn-cal-delete" class="btn btn-danger">
+            Delete Saved
+          </button>
+          <span id="cal-hint" class="cal-hint"
+            >Click "+ Add Region", then click 4 corners on the video to define a
+            detection zone.</span
+          >
+        </div>
+      </section>
 
-  <!-- ---- Left column: video + region toolbar ---- -->
-  <section class="video-section">
+      <!-- ---- Right column: controls ---- -->
+      <aside class="controls-panel">
+        <!-- Detection -->
+        <div class="card">
+          <h3>Detection</h3>
+          <div class="row gap-8">
+            <button id="btn-detect-start" class="btn btn-success flex-1">
+              ▶ Start
+            </button>
+            <button id="btn-detect-stop" class="btn btn-danger flex-1">
+              ■ Stop
+            </button>
+          </div>
+          <button id="btn-reset-bg" class="btn btn-secondary full-width mt-8">
+            Reset Background Model
+          </button>
+          <p class="note">
+            After placing the camera, click Start. Wait 2–3 s for the background
+            to stabilise, then step on the regions.
+          </p>
+        </div>
 
-    <div id="video-container">
-      <img id="video-feed" src="/video_feed" alt="Camera feed" />
-      <canvas id="overlay-canvas"></canvas>
-      <div id="key-pop" class="key-pop hidden"></div>
-    </div>
+        <!-- Active note display -->
+        <div class="card card-highlight">
+          <h3>Active Note</h3>
+          <div id="active-key-display" class="active-key-display">—</div>
+          <div id="active-note-display" class="active-note-display">—</div>
+        </div>
 
-    <!-- Region drawing toolbar -->
-    <div class="cal-toolbar">
-      <button id="btn-add-region"   class="btn btn-primary">+ Add Region</button>
-      <button id="btn-cancel-draw"  class="btn btn-warn hidden">✕ Cancel</button>
-      <button id="btn-clear-all"    class="btn btn-secondary">Clear All</button>
-      <button id="btn-cal-save"     class="btn btn-success" disabled>Save Regions</button>
-      <button id="btn-cal-delete"   class="btn btn-danger">Delete Saved</button>
-      <span id="cal-hint" class="cal-hint">Click "+ Add Region", then click 4 corners on the video to define a detection zone.</span>
-    </div>
+        <!-- Region list -->
+        <div class="card">
+          <h3>
+            Regions <span id="region-count" class="region-count">0 / 4</span>
+          </h3>
+          <div id="region-list" class="region-list">
+            <p class="note" id="region-empty-hint">
+              No regions yet. Click "+ Add Region" to draw one.
+            </p>
+          </div>
+        </div>
 
-  </section>
+        <!-- Settings -->
+        <div class="card">
+          <h3>Settings</h3>
 
-  <!-- ---- Right column: controls ---- -->
-  <aside class="controls-panel">
+          <label class="setting-row">
+            <span>Camera source</span>
+            <input
+              id="setting-camera"
+              type="text"
+              value="0"
+              class="input-sm"
+              title="Webcam index (0, 1…) or RTSP/HTTP URL"
+            />
+          </label>
 
-    <!-- Detection -->
-    <div class="card">
-      <h3>Detection</h3>
-      <div class="row gap-8">
-        <button id="btn-detect-start"  class="btn btn-success flex-1">▶ Start</button>
-        <button id="btn-detect-stop"   class="btn btn-danger  flex-1">■ Stop</button>
-      </div>
-      <button id="btn-reset-bg" class="btn btn-secondary full-width mt-8">
-        Reset Background Model
-      </button>
-      <p class="note">After placing the camera, click Start. Wait 2–3 s for the background to stabilise, then step on the regions.</p>
-    </div>
+          <label class="setting-row">
+            <span>Sensitivity <span id="val-sensitivity">60</span></span>
+            <input
+              id="setting-sensitivity"
+              type="range"
+              min="0"
+              max="100"
+              value="60"
+            />
+          </label>
 
-    <!-- Active note display -->
-    <div class="card card-highlight">
-      <h3>Active Note</h3>
-      <div id="active-key-display" class="active-key-display">—</div>
-      <div id="active-note-display" class="active-note-display">—</div>
-    </div>
+          <label class="setting-row">
+            <span>Cooldown <span id="val-cooldown">400</span> ms</span>
+            <input
+              id="setting-cooldown"
+              type="range"
+              min="100"
+              max="2000"
+              step="50"
+              value="400"
+            />
+          </label>
 
-    <!-- Region list -->
-    <div class="card">
-      <h3>Regions <span id="region-count" class="region-count">0 / 4</span></h3>
-      <div id="region-list" class="region-list">
-        <p class="note" id="region-empty-hint">No regions yet. Click "+ Add Region" to draw one.</p>
-      </div>
-    </div>
+          <label class="setting-row">
+            <span>Min blob area <span id="val-blob">800</span> px²</span>
+            <input
+              id="setting-blob"
+              type="range"
+              min="100"
+              max="5000"
+              step="100"
+              value="800"
+            />
+          </label>
 
-    <!-- Settings -->
-    <div class="card">
-      <h3>Settings</h3>
+          <label class="setting-row">
+            <span>Polyphony limit</span>
+            <input
+              id="setting-polyphony"
+              type="number"
+              min="1"
+              max="4"
+              value="4"
+              class="input-sm"
+              title="Max simultaneous region triggers per frame"
+            />
+          </label>
 
-      <label class="setting-row">
-        <span>Camera source</span>
-        <input id="setting-camera" type="text" value="0" class="input-sm"
-               title="Webcam index (0, 1…) or RTSP/HTTP URL" />
-      </label>
+          <label class="setting-row">
+            <span>Flip camera horizontally</span>
+            <input id="setting-flip" type="checkbox" class="toggle" />
+          </label>
 
-      <label class="setting-row">
-        <span>Sensitivity <span id="val-sensitivity">60</span></span>
-        <input id="setting-sensitivity" type="range" min="0" max="100" value="60" />
-      </label>
+          <button
+            id="btn-save-settings"
+            class="btn btn-primary full-width mt-8"
+          >
+            Apply Settings
+          </button>
+        </div>
+      </aside>
+    </main>
 
-      <label class="setting-row">
-        <span>Cooldown <span id="val-cooldown">400</span> ms</span>
-        <input id="setting-cooldown" type="range" min="100" max="2000" step="50" value="400" />
-      </label>
-
-      <label class="setting-row">
-        <span>Min blob area <span id="val-blob">800</span> px²</span>
-        <input id="setting-blob" type="range" min="100" max="5000" step="100" value="800" />
-      </label>
-
-      <label class="setting-row">
-        <span>Polyphony limit</span>
-        <input id="setting-polyphony" type="number" min="1" max="4" value="4" class="input-sm"
-               title="Max simultaneous region triggers per frame" />
-      </label>
-
-      <label class="setting-row">
-        <span>Flip camera horizontally</span>
-        <input id="setting-flip" type="checkbox" class="toggle" />
-      </label>
-
-      <button id="btn-save-settings" class="btn btn-primary full-width mt-8">
-        Apply Settings
-      </button>
-    </div>
-
-  </aside>
-
-</main>
-
-<script src="/static/js/app.js"></script>
-</body>
+    <script src="/static/js/app.js"></script>
+  </body>
 </html>
