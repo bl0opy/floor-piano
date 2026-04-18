@@ -1,11 +1,8 @@
 /**
- * Floor Piano — frontend application
+ * Floor Piano — multi-region frontend
  *
- * Responsibilities:
- *  - Maintain a WebSocket connection to /ws for real-time events
- *  - Render interactive calibration overlay on the canvas
- *  - Send calibration / settings to the REST API
- *  - Reflect server state in the UI (detection on/off, active key, etc.)
+ * Up to 4 independent detection zones can be drawn on the canvas.
+ * Each zone is a quadrilateral; the user picks one note per zone.
  */
 
 'use strict';
@@ -15,43 +12,46 @@
 // ---------------------------------------------------------------------------
 
 const API = {
-  state:           '/api/state',
-  calibration:     '/api/calibration',
-  settings:        '/api/settings',
-  detectStart:     '/api/detection/start',
-  detectStop:      '/api/detection/stop',
-  resetBg:         '/api/detection/reset_background',
+  state:       '/api/state',
+  calibration: '/api/calibration',
+  settings:    '/api/settings',
+  detectStart: '/api/detection/start',
+  detectStop:  '/api/detection/stop',
+  resetBg:     '/api/detection/reset_background',
 };
 
-const CAL_POINT_RADIUS = 7;   // canvas px
-const CAL_DRAG_RADIUS  = 16;  // hit area for dragging an existing point
+const MAX_REGIONS = 4;
+const REGION_COLORS   = ['#4f8ef7', '#34c27a', '#f0a832', '#e05252'];
+const REGION_FILLS    = ['rgba(79,142,247,0.18)', 'rgba(52,194,122,0.18)',
+                         'rgba(240,168,50,0.18)',  'rgba(224,82,82,0.18)'];
+const DEFAULT_NOTES_PER_REGION = ['C4', 'G4', 'E4', 'A4'];
 
-// Canvas drawing colours
-const C = {
-  point:      '#f0a832',
-  pointFill:  'rgba(240,168,50,0.25)',
-  poly:       'rgba(79,142,247,0.20)',
-  polyBorder: '#4f8ef7',
-  line:       '#4f8ef7',
-};
+const DRAG_RADIUS = 16;   // px hit area for point dragging
+
+// ---------------------------------------------------------------------------
+// Note list (C2–C6 chromatic, generated on startup from server or built here)
+// ---------------------------------------------------------------------------
+
+let AVAILABLE_NOTES = [];   // [{name, frequency, label}, …] from server
 
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
 
 const state = {
-  wsConnected: false,
-  detecting:   false,
-  calibrated:  false,
-  calMode:     false,
-  numKeys:     8,
-  calPoints:   [],          // [{x,y}] in canvas space (max 4)
-  dragIndex:   -1,
-  videoW:      640,         // actual camera resolution (from server)
-  videoH:      480,
-  notes:       [],
-  activeKey:   null,
-  activeKeyTmr: null,
+  wsConnected:  false,
+  detecting:    false,
+  // Regions stored in VIDEO space: [{points:[[vx,vy]×4], note:"C4"}, …]
+  regions:      [],
+  // Index of the region currently being drawn; -1 = not drawing
+  drawingIdx:   -1,
+  // Video dimensions (from server)
+  videoW: 640,
+  videoH: 480,
+  // Drag state: {regionIdx, pointIdx} or null
+  dragInfo:     null,
+  // Whether state.regions differs from last saved server state
+  unsaved:      false,
 };
 
 // ---------------------------------------------------------------------------
@@ -67,21 +67,21 @@ const keyPop            = $('key-pop');
 const wsStatus          = $('ws-status');
 const activeKeyDisplay  = $('active-key-display');
 const activeNoteDisplay = $('active-note-display');
-const keyMap            = $('key-map');
-const numKeysInput      = $('num-keys');
+const regionList        = $('region-list');
+const regionCount       = $('region-count');
+const regionEmptyHint   = $('region-empty-hint');
 const calHint           = $('cal-hint');
 
-// Buttons
-const btnCalToggle  = $('btn-cal-toggle');
-const btnCalClear   = $('btn-cal-clear');
-const btnCalSave    = $('btn-cal-save');
-const btnCalDelete  = $('btn-cal-delete');
-const btnDetStart   = $('btn-detect-start');
-const btnDetStop    = $('btn-detect-stop');
-const btnResetBg    = $('btn-reset-bg');
+const btnAddRegion   = $('btn-add-region');
+const btnCancelDraw  = $('btn-cancel-draw');
+const btnClearAll    = $('btn-clear-all');
+const btnCalSave     = $('btn-cal-save');
+const btnCalDelete   = $('btn-cal-delete');
+const btnDetStart    = $('btn-detect-start');
+const btnDetStop     = $('btn-detect-stop');
+const btnResetBg     = $('btn-reset-bg');
 const btnSaveSettings = $('btn-save-settings');
 
-// Settings inputs
 const settingCamera      = $('setting-camera');
 const settingSensitivity = $('setting-sensitivity');
 const settingCooldown    = $('setting-cooldown');
@@ -104,28 +104,20 @@ function connectWS() {
     state.wsConnected = true;
     wsReconnectDelay = 1000;
     setWsStatus(true);
-    console.log('[WS] Connected');
   };
 
   ws.onclose = () => {
     state.wsConnected = false;
     setWsStatus(false);
-    console.log(`[WS] Closed — reconnecting in ${wsReconnectDelay}ms`);
     setTimeout(connectWS, wsReconnectDelay);
     wsReconnectDelay = Math.min(wsReconnectDelay * 2, 8000);
   };
 
-  ws.onerror = err => {
-    console.warn('[WS] Error:', err);
-    ws.close();
-  };
+  ws.onerror = () => ws.close();
 
   ws.onmessage = ev => {
-    try {
-      handleServerEvent(JSON.parse(ev.data));
-    } catch (e) {
-      console.warn('[WS] Bad message:', e);
-    }
+    try { handleServerEvent(JSON.parse(ev.data)); }
+    catch (e) { console.warn('[WS] Bad message:', e); }
   };
 }
 
@@ -134,7 +126,6 @@ function setWsStatus(ok) {
   wsStatus.className = 'badge ' + (ok ? 'badge-ok' : 'badge-off');
 }
 
-// Heartbeat so the server can detect dead connections
 setInterval(() => {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({type: 'ping'}));
 }, 20000);
@@ -147,22 +138,23 @@ function handleServerEvent(msg) {
   switch (msg.type) {
 
     case 'state':
-      // Full snapshot on first connect / reconnect
-      state.detecting  = msg.detection_enabled || false;
-      state.calibrated = msg.calibrated || false;
-      state.numKeys    = msg.num_keys || 8;
-      state.videoW     = msg.frame_width  || 640;
-      state.videoH     = msg.frame_height || 480;
-      state.notes      = msg.notes || [];
+      state.detecting = msg.detection_enabled || false;
+      state.videoW    = msg.frame_width  || 640;
+      state.videoH    = msg.frame_height || 480;
+      if (msg.available_notes?.length) AVAILABLE_NOTES = msg.available_notes;
+      if (msg.regions) {
+        state.regions = msg.regions.map(r => ({points: r.points.map(p => [...p]), note: r.note}));
+        state.unsaved = false;
+      }
       applySettingsToUI(msg.settings || {});
-      numKeysInput.value = state.numKeys;
-      renderKeyMap();
       updateDetectionButtons();
-      updateCalHint();
+      renderRegionList();
+      drawRegionOverlay();
+      updateToolbarState();
       break;
 
     case 'key_triggered':
-      showKeyTriggered(msg.key_index, msg.note_label);
+      showNoteTriggered(msg.region_index, msg.note_label);
       break;
 
     case 'detection_state':
@@ -171,107 +163,39 @@ function handleServerEvent(msg) {
       break;
 
     case 'calibration_updated':
-      state.calibrated = msg.calibrated;
-      state.numKeys    = msg.num_keys || state.numKeys;
-      state.notes      = msg.notes || state.notes;
-      numKeysInput.value = state.numKeys;
-      renderKeyMap();
-      updateCalHint();
-      drawCalOverlay();
+      if (msg.regions) {
+        state.regions = msg.regions.map(r => ({points: r.points.map(p => [...p]), note: r.note}));
+        state.unsaved = false;
+      } else if (!msg.calibrated) {
+        state.regions = [];
+        state.unsaved = false;
+      }
+      renderRegionList();
+      drawRegionOverlay();
+      updateToolbarState();
       break;
   }
 }
 
 // ---------------------------------------------------------------------------
-// Key trigger display
+// Note trigger display
 // ---------------------------------------------------------------------------
 
-function showKeyTriggered(keyIndex, noteLabel) {
-  // Update big displays
-  activeKeyDisplay.textContent = noteLabel || `Key ${keyIndex + 1}`;
-  activeNoteDisplay.textContent = `Key ${keyIndex + 1}`;
-  activeKeyDisplay.style.color = '#4f8ef7';
+function showNoteTriggered(regionIdx, noteLabel) {
+  activeKeyDisplay.textContent = noteLabel || '?';
+  activeNoteDisplay.textContent = `Region ${regionIdx + 1}`;
+  const color = REGION_COLORS[regionIdx % REGION_COLORS.length];
+  activeKeyDisplay.style.color = color;
 
-  // Float pop-up on the video
-  keyPop.textContent = noteLabel || `♪${keyIndex + 1}`;
+  keyPop.textContent = noteLabel || '♪';
+  keyPop.style.background = color + 'dd';
   keyPop.classList.remove('hidden');
 
-  // Highlight chip in the key map
-  document.querySelectorAll('.key-chip').forEach((chip, i) => {
-    chip.classList.toggle('active', i === keyIndex);
-  });
-
-  // Auto-dismiss
-  clearTimeout(state.activeKeyTmr);
-  state.activeKeyTmr = setTimeout(() => {
+  clearTimeout(state._popTimer);
+  state._popTimer = setTimeout(() => {
     keyPop.classList.add('hidden');
-    document.querySelectorAll('.key-chip').forEach(c => c.classList.remove('active'));
     activeKeyDisplay.style.color = '';
   }, 600);
-}
-
-// ---------------------------------------------------------------------------
-// Key map strip
-// ---------------------------------------------------------------------------
-
-function renderKeyMap() {
-  keyMap.innerHTML = '';
-  const n = state.numKeys || 8;
-  for (let i = 0; i < n; i++) {
-    const note = state.notes[i] || {};
-    const chip = document.createElement('div');
-    chip.className = 'key-chip';
-    chip.dataset.key = i;
-    chip.innerHTML = `<span class="chip-num">${i + 1}</span>${note.label || '—'}`;
-    keyMap.appendChild(chip);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Detection button state
-// ---------------------------------------------------------------------------
-
-function updateDetectionButtons() {
-  btnDetStart.disabled = state.detecting;
-  btnDetStop.disabled  = !state.detecting;
-}
-
-// ---------------------------------------------------------------------------
-// Calibration mode toggle
-// ---------------------------------------------------------------------------
-
-function enterCalMode() {
-  state.calMode = true;
-  document.body.classList.add('cal-mode');
-  btnCalToggle.textContent = '✕ Exit Calibration';
-  btnCalToggle.classList.replace('btn-primary', 'btn-warn');
-  updateCalHint();
-  drawCalOverlay();
-}
-
-function exitCalMode() {
-  state.calMode = false;
-  document.body.classList.remove('cal-mode');
-  btnCalToggle.textContent = 'Calibrate';
-  btnCalToggle.classList.replace('btn-warn', 'btn-primary');
-  updateCalHint();
-  drawCalOverlay();
-}
-
-function updateCalHint() {
-  const n = state.calPoints.length;
-  if (!state.calMode) {
-    calHint.textContent = state.calibrated
-      ? '✓ Floor region calibrated. Click Calibrate to edit.'
-      : 'Click Calibrate, then click 4 corners of the floor piano region.';
-    return;
-  }
-  if (n < 4) {
-    calHint.textContent = `Click corner ${n + 1} of 4 on the video (top-left → top-right → bottom-right → bottom-left).`;
-  } else {
-    calHint.textContent = 'All 4 points set. Drag to adjust, then click Save Calibration.';
-  }
-  btnCalSave.disabled = n < 4;
 }
 
 // ---------------------------------------------------------------------------
@@ -282,13 +206,15 @@ function syncCanvas() {
   const rect = videoFeed.getBoundingClientRect();
   canvas.width  = rect.width  || 640;
   canvas.height = rect.height || 480;
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
 }
 
 function canvasToVideo(cx, cy) {
-  return {
-    x: Math.round(cx / canvas.width  * state.videoW),
-    y: Math.round(cy / canvas.height * state.videoH),
-  };
+  return [
+    Math.round(cx / canvas.width  * state.videoW),
+    Math.round(cy / canvas.height * state.videoH),
+  ];
 }
 
 function videoToCanvas(vx, vy) {
@@ -299,140 +225,329 @@ function videoToCanvas(vx, vy) {
 }
 
 // ---------------------------------------------------------------------------
-// Canvas drawing
+// Canvas overlay drawing
 // ---------------------------------------------------------------------------
 
-function drawCalOverlay() {
+function drawRegionOverlay() {
   syncCanvas();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  const pts = state.calPoints;
+  // Draw saved / complete regions
+  state.regions.forEach((region, idx) => {
+    if (idx === state.drawingIdx) return;   // drawn separately below
+    const pts = region.points.map(([vx, vy]) => videoToCanvas(vx, vy));
+    if (pts.length === 4) drawCompleteRegion(pts, idx, region.note);
+  });
+
+  // Draw the region currently being drawn
+  if (state.drawingIdx !== -1) {
+    const region = state.regions[state.drawingIdx];
+    if (region) {
+      const pts = region.points.map(([vx, vy]) => videoToCanvas(vx, vy));
+      drawInProgressRegion(pts, state.drawingIdx);
+    }
+  }
+}
+
+function drawCompleteRegion(pts, idx, note) {
+  const color = REGION_COLORS[idx % REGION_COLORS.length];
+  const fill  = REGION_FILLS[idx % REGION_FILLS.length];
+
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < 4; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.setLineDash([]);
+  ctx.stroke();
+
+  // Note label
+  const cx = pts.reduce((s, p) => s + p.x, 0) / 4;
+  const cy = pts.reduce((s, p) => s + p.y, 0) / 4;
+  ctx.font = 'bold 15px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = color;
+  ctx.fillText(note || '?', cx, cy);
+
+  // Corner handles
+  pts.forEach(p => drawHandle(p.x, p.y, color));
+}
+
+function drawInProgressRegion(pts, idx) {
+  const color = REGION_COLORS[idx % REGION_COLORS.length];
+
   if (pts.length === 0) return;
 
-  // Polygon fill
-  if (pts.length === 4) {
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-    ctx.closePath();
-    ctx.fillStyle = C.poly;
-    ctx.fill();
-    ctx.strokeStyle = C.polyBorder;
-    ctx.lineWidth = 2;
-    ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 4]);
+  ctx.stroke();
+  ctx.setLineDash([]);
 
-    // Draw key divisions
-    if (state.calMode) drawKeyDivisions(pts);
-  } else {
-    // Partial polygon: just lines between points
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-    ctx.strokeStyle = C.line;
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6, 4]);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
+  pts.forEach(p => drawHandle(p.x, p.y, color));
+}
 
-  // Draw point handles
-  pts.forEach((p, i) => {
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, CAL_POINT_RADIUS + 3, 0, Math.PI * 2);
-    ctx.fillStyle = C.pointFill;
-    ctx.fill();
+function drawHandle(x, y, color) {
+  ctx.beginPath();
+  ctx.arc(x, y, 9, 0, Math.PI * 2);
+  ctx.fillStyle = color + '44';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(x, y, 5, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+}
 
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, CAL_POINT_RADIUS, 0, Math.PI * 2);
-    ctx.fillStyle = C.point;
-    ctx.fill();
+// ---------------------------------------------------------------------------
+// Canvas mouse events
+// ---------------------------------------------------------------------------
 
-    ctx.fillStyle = '#111';
-    ctx.font = 'bold 9px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(i + 1, p.x, p.y);
+function canvasPos(ev) {
+  const r = videoFeed.getBoundingClientRect();
+  return { x: ev.clientX - r.left, y: ev.clientY - r.top };
+}
+
+/** Find nearest draggable point across all complete regions. Returns {regionIdx,pointIdx} or null. */
+function findNearestPoint(pos) {
+  let best = null, bestD = DRAG_RADIUS;
+  state.regions.forEach((region, rIdx) => {
+    if (region.points.length < 4) return;
+    region.points.forEach(([vx, vy], pIdx) => {
+      const cp = videoToCanvas(vx, vy);
+      const d = Math.hypot(cp.x - pos.x, cp.y - pos.y);
+      if (d < bestD) { bestD = d; best = { regionIdx: rIdx, pointIdx: pIdx }; }
+    });
   });
-}
-
-/**
- * Draw evenly-spaced vertical key dividers inside the calibrated quad.
- * Uses bilinear interpolation between the four corners.
- */
-function drawKeyDivisions(pts) {
-  const n = parseInt(numKeysInput.value, 10) || state.numKeys;
-  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-  ctx.lineWidth = 1;
-
-  // pts order: TL, TR, BR, BL
-  const [tl, tr, br, bl] = pts;
-
-  for (let i = 1; i < n; i++) {
-    const t = i / n;
-    // Linear interpolation along top and bottom edges
-    const topX    = tl.x + (tr.x - tl.x) * t;
-    const topY    = tl.y + (tr.y - tl.y) * t;
-    const bottomX = bl.x + (br.x - bl.x) * t;
-    const bottomY = bl.y + (br.y - bl.y) * t;
-
-    ctx.beginPath();
-    ctx.moveTo(topX, topY);
-    ctx.lineTo(bottomX, bottomY);
-    ctx.stroke();
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Canvas mouse events (calibration)
-// ---------------------------------------------------------------------------
-
-function canvasMousePos(ev) {
-  const rect = canvas.getBoundingClientRect();
-  return { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
-}
-
-function nearestPointIndex(pos) {
-  for (let i = 0; i < state.calPoints.length; i++) {
-    const p = state.calPoints[i];
-    const d = Math.hypot(p.x - pos.x, p.y - pos.y);
-    if (d <= CAL_DRAG_RADIUS) return i;
-  }
-  return -1;
+  return best;
 }
 
 canvas.addEventListener('mousedown', ev => {
-  if (!state.calMode) return;
-  const pos = canvasMousePos(ev);
+  const pos = canvasPos(ev);
 
-  // Try to start dragging an existing point
-  const idx = nearestPointIndex(pos);
-  if (idx !== -1) {
-    state.dragIndex = idx;
+  // Try dragging an existing point (any complete region)
+  const hit = findNearestPoint(pos);
+  if (hit) {
+    state.dragInfo = hit;
+    canvas.style.cursor = 'grabbing';
     return;
   }
 
-  // Add new point (up to 4)
-  if (state.calPoints.length < 4) {
-    state.calPoints.push({ x: pos.x, y: pos.y });
-    updateCalHint();
-    drawCalOverlay();
+  // Add point to the region being drawn
+  if (state.drawingIdx !== -1) {
+    const region = state.regions[state.drawingIdx];
+    if (region && region.points.length < 4) {
+      region.points.push(canvasToVideo(pos.x, pos.y));
+      if (region.points.length === 4) {
+        // Region complete — exit drawing mode
+        state.drawingIdx = -1;
+        state.unsaved = true;
+        updateToolbarState();
+        renderRegionList();
+      }
+      drawRegionOverlay();
+      updateCalHint();
+    }
   }
 });
 
 canvas.addEventListener('mousemove', ev => {
-  if (!state.calMode || state.dragIndex === -1) return;
-  const pos = canvasMousePos(ev);
-  state.calPoints[state.dragIndex] = { x: pos.x, y: pos.y };
-  drawCalOverlay();
+  const pos = canvasPos(ev);
+
+  if (state.dragInfo) {
+    const { regionIdx, pointIdx } = state.dragInfo;
+    state.regions[regionIdx].points[pointIdx] = canvasToVideo(pos.x, pos.y);
+    state.unsaved = true;
+    drawRegionOverlay();
+    return;
+  }
+
+  // Update cursor
+  if (state.drawingIdx !== -1) {
+    canvas.style.cursor = 'crosshair';
+  } else if (findNearestPoint(pos)) {
+    canvas.style.cursor = 'grab';
+  } else {
+    canvas.style.cursor = 'default';
+  }
 });
 
 canvas.addEventListener('mouseup', () => {
-  state.dragIndex = -1;
+  state.dragInfo = null;
+  canvas.style.cursor = state.drawingIdx !== -1 ? 'crosshair' : 'default';
 });
 
 canvas.addEventListener('mouseleave', () => {
-  state.dragIndex = -1;
+  state.dragInfo = null;
 });
+
+// ---------------------------------------------------------------------------
+// Region management
+// ---------------------------------------------------------------------------
+
+function startAddRegion() {
+  if (state.regions.length >= MAX_REGIONS) return;
+  if (state.drawingIdx !== -1) return;  // already drawing
+
+  const idx = state.regions.length;
+  state.regions.push({ points: [], note: DEFAULT_NOTES_PER_REGION[idx] || 'C4' });
+  state.drawingIdx = idx;
+
+  canvas.style.pointerEvents = 'auto';
+  canvas.style.cursor = 'crosshair';
+
+  updateToolbarState();
+  renderRegionList();
+  updateCalHint();
+  drawRegionOverlay();
+}
+
+function cancelDrawing() {
+  if (state.drawingIdx === -1) return;
+  state.regions.splice(state.drawingIdx, 1);
+  state.drawingIdx = -1;
+  canvas.style.cursor = 'default';
+  updateToolbarState();
+  renderRegionList();
+  updateCalHint();
+  drawRegionOverlay();
+}
+
+function deleteRegion(idx) {
+  if (state.drawingIdx === idx) {
+    state.drawingIdx = -1;
+    canvas.style.cursor = 'default';
+  } else if (state.drawingIdx > idx) {
+    state.drawingIdx--;
+  }
+  state.regions.splice(idx, 1);
+  state.unsaved = true;
+  updateToolbarState();
+  renderRegionList();
+  updateCalHint();
+  drawRegionOverlay();
+}
+
+function setRegionNote(idx, note) {
+  if (state.regions[idx]) {
+    state.regions[idx].note = note;
+    state.unsaved = true;
+    updateToolbarState();
+    drawRegionOverlay();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Toolbar / button state
+// ---------------------------------------------------------------------------
+
+function updateToolbarState() {
+  const drawing  = state.drawingIdx !== -1;
+  const complete = state.regions.filter(r => r.points.length === 4);
+  const canAdd   = !drawing && state.regions.length < MAX_REGIONS;
+
+  btnAddRegion.disabled  = !canAdd;
+  btnAddRegion.classList.toggle('hidden', drawing);
+  btnCancelDraw.classList.toggle('hidden', !drawing);
+  btnClearAll.disabled   = state.regions.length === 0;
+  btnCalSave.disabled    = complete.length === 0 || drawing;
+
+  regionCount.textContent = `${complete.length} / ${MAX_REGIONS}`;
+}
+
+function updateCalHint() {
+  if (state.drawingIdx !== -1) {
+    const region = state.regions[state.drawingIdx];
+    const n = region ? region.points.length : 0;
+    const remaining = 4 - n;
+    calHint.textContent = remaining > 0
+      ? `Click ${remaining} more corner${remaining > 1 ? 's' : ''} for Region ${state.drawingIdx + 1}.`
+      : 'Region complete.';
+    calHint.style.color = REGION_COLORS[state.drawingIdx % REGION_COLORS.length];
+  } else if (state.unsaved && state.regions.some(r => r.points.length === 4)) {
+    calHint.textContent = 'Unsaved changes — click "Save Regions" to apply.';
+    calHint.style.color = '#f0a832';
+  } else if (state.regions.some(r => r.points.length === 4)) {
+    calHint.textContent = `✓ ${state.regions.filter(r => r.points.length === 4).length} region(s) saved. Drag corners to adjust, then Save.`;
+    calHint.style.color = '';
+  } else {
+    calHint.textContent = 'Click "+ Add Region", then click 4 corners on the video to define a detection zone.';
+    calHint.style.color = '';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Region list rendering
+// ---------------------------------------------------------------------------
+
+function renderRegionList() {
+  const complete = state.regions.filter(r => r.points.length === 4);
+  regionEmptyHint.style.display = state.regions.length === 0 ? '' : 'none';
+
+  // Remove old region items (keep the empty hint)
+  regionList.querySelectorAll('.region-item').forEach(el => el.remove());
+
+  state.regions.forEach((region, idx) => {
+    const color = REGION_COLORS[idx % REGION_COLORS.length];
+    const isDrawing = idx === state.drawingIdx;
+    const isComplete = region.points.length === 4;
+
+    const item = document.createElement('div');
+    item.className = 'region-item';
+    item.dataset.idx = idx;
+
+    // Colour swatch
+    const swatch = document.createElement('div');
+    swatch.className = 'region-swatch';
+    swatch.style.background = color;
+
+    // Label
+    const label = document.createElement('span');
+    label.className = 'region-label';
+    label.textContent = `Region ${idx + 1}`;
+    if (isDrawing) {
+      label.textContent += ' — drawing…';
+      label.style.color = color;
+    }
+
+    item.appendChild(swatch);
+    item.appendChild(label);
+
+    if (isComplete) {
+      // Note selector
+      const sel = document.createElement('select');
+      sel.className = 'note-select';
+      sel.title = 'Note to play when this region is triggered';
+      AVAILABLE_NOTES.forEach(n => {
+        const opt = document.createElement('option');
+        opt.value = n.name;
+        opt.textContent = n.label;
+        if (n.name === region.note) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      sel.addEventListener('change', () => setRegionNote(idx, sel.value));
+      item.appendChild(sel);
+    }
+
+    // Delete button
+    const del = document.createElement('button');
+    del.className = 'btn btn-danger btn-xs';
+    del.textContent = '×';
+    del.title = 'Remove region';
+    del.addEventListener('click', () => deleteRegion(idx));
+    item.appendChild(del);
+
+    regionList.appendChild(item);
+  });
+
+  updateCalHint();
+}
 
 // ---------------------------------------------------------------------------
 // Settings helpers
@@ -441,22 +556,21 @@ canvas.addEventListener('mouseleave', () => {
 function applySettingsToUI(s) {
   if (s.camera_source !== undefined) settingCamera.value = s.camera_source;
   if (s.sensitivity   !== undefined) {
-    settingSensitivity.value      = s.sensitivity;
+    settingSensitivity.value = s.sensitivity;
     $('val-sensitivity').textContent = s.sensitivity;
   }
   if (s.cooldown_ms !== undefined) {
-    settingCooldown.value          = s.cooldown_ms;
-    $('val-cooldown').textContent  = s.cooldown_ms;
+    settingCooldown.value = s.cooldown_ms;
+    $('val-cooldown').textContent = s.cooldown_ms;
   }
   if (s.min_blob_area !== undefined) {
-    settingBlob.value              = s.min_blob_area;
-    $('val-blob').textContent      = s.min_blob_area;
+    settingBlob.value = s.min_blob_area;
+    $('val-blob').textContent = s.min_blob_area;
   }
   if (s.polyphony_limit !== undefined) settingPolyphony.value = s.polyphony_limit;
   if (s.flip_horizontal !== undefined) settingFlip.checked = !!s.flip_horizontal;
 }
 
-// Live-update slider labels
 settingSensitivity.addEventListener('input', () => {
   $('val-sensitivity').textContent = settingSensitivity.value;
 });
@@ -466,6 +580,15 @@ settingCooldown.addEventListener('input', () => {
 settingBlob.addEventListener('input', () => {
   $('val-blob').textContent = settingBlob.value;
 });
+
+// ---------------------------------------------------------------------------
+// Detection button state
+// ---------------------------------------------------------------------------
+
+function updateDetectionButtons() {
+  btnDetStart.disabled = state.detecting;
+  btnDetStop.disabled  = !state.detecting;
+}
 
 // ---------------------------------------------------------------------------
 // API helpers
@@ -499,46 +622,52 @@ async function del(url) {
 // Button handlers
 // ---------------------------------------------------------------------------
 
-btnCalToggle.addEventListener('click', () => {
-  state.calMode ? exitCalMode() : enterCalMode();
-});
+btnAddRegion.addEventListener('click', startAddRegion);
+btnCancelDraw.addEventListener('click', cancelDrawing);
 
-btnCalClear.addEventListener('click', () => {
-  state.calPoints = [];
-  btnCalSave.disabled = true;
-  drawCalOverlay();
+btnClearAll.addEventListener('click', () => {
+  if (state.regions.length === 0) return;
+  state.regions = [];
+  state.drawingIdx = -1;
+  state.unsaved = true;
+  canvas.style.cursor = 'default';
+  updateToolbarState();
+  renderRegionList();
+  drawRegionOverlay();
   updateCalHint();
 });
 
 btnCalSave.addEventListener('click', async () => {
-  if (state.calPoints.length !== 4) return;
+  const complete = state.regions.filter(r => r.points.length === 4);
+  if (complete.length === 0) return;
 
-  // Convert canvas coords → video coords
-  const videoPoints = state.calPoints.map(p => {
-    const v = canvasToVideo(p.x, p.y);
-    return [v.x, v.y];
-  });
+  const payload = {
+    regions: complete.map(r => ({
+      points: r.points,
+      note: r.note,
+    })),
+  };
 
-  const numKeys = Math.max(1, parseInt(numKeysInput.value, 10) || 8);
-  const result = await post(API.calibration, { region_points: videoPoints, num_keys: numKeys });
-
+  const result = await post(API.calibration, payload);
   if (result?.success) {
-    state.calibrated = true;
-    state.numKeys    = numKeys;
-    exitCalMode();
-    // Keep the drawn points so user can see what was saved
-    drawCalOverlay();
+    state.unsaved = false;
+    // Server will broadcast calibration_updated; update hint immediately
+    updateCalHint();
   } else {
-    alert('Calibration save failed. Make sure you have exactly 4 points.');
+    alert('Failed to save regions. Check that each region has exactly 4 points.');
   }
 });
 
 btnCalDelete.addEventListener('click', async () => {
-  if (!confirm('Delete calibration data?')) return;
+  if (!confirm('Delete all saved calibration data?')) return;
   await del(API.calibration);
-  state.calibrated = false;
-  state.calPoints  = [];
-  drawCalOverlay();
+  state.regions = [];
+  state.drawingIdx = -1;
+  state.unsaved = false;
+  canvas.style.cursor = 'default';
+  updateToolbarState();
+  renderRegionList();
+  drawRegionOverlay();
   updateCalHint();
 });
 
@@ -559,11 +688,11 @@ btnResetBg.addEventListener('click', () => post(API.resetBg, {}));
 btnSaveSettings.addEventListener('click', async () => {
   const src = settingCamera.value.trim();
   await post(API.settings, {
-    camera_source: /^\d+$/.test(src) ? parseInt(src, 10) : src,
+    camera_source:   /^\d+$/.test(src) ? parseInt(src, 10) : src,
     sensitivity:     parseInt(settingSensitivity.value, 10),
     cooldown_ms:     parseInt(settingCooldown.value, 10),
     min_blob_area:   parseInt(settingBlob.value, 10),
-    polyphony_limit: Math.max(1, parseInt(settingPolyphony.value, 10) || 2),
+    polyphony_limit: Math.max(1, parseInt(settingPolyphony.value, 10) || 4),
     flip_horizontal: settingFlip.checked,
   });
 });
@@ -576,17 +705,23 @@ async function loadInitialState() {
   try {
     const data = await fetch(API.state).then(r => r.json());
 
-    state.detecting  = data.detection_enabled || false;
-    state.calibrated = data.calibrated        || false;
-    state.numKeys    = data.num_keys          || 8;
-    state.videoW     = data.frame_width       || 640;
-    state.videoH     = data.frame_height      || 480;
-    state.notes      = data.notes             || [];
+    state.detecting = data.detection_enabled || false;
+    state.videoW    = data.frame_width  || 640;
+    state.videoH    = data.frame_height || 480;
 
-    numKeysInput.value = state.numKeys;
+    if (data.available_notes?.length) AVAILABLE_NOTES = data.available_notes;
+    if (data.regions) {
+      state.regions = data.regions.map(r => ({
+        points: r.points.map(p => [...p]),
+        note: r.note,
+      }));
+    }
+
     applySettingsToUI(data.settings || {});
-    renderKeyMap();
     updateDetectionButtons();
+    updateToolbarState();
+    renderRegionList();
+    drawRegionOverlay();
     updateCalHint();
   } catch (e) {
     console.warn('Could not load initial state:', e);
@@ -594,23 +729,25 @@ async function loadInitialState() {
 }
 
 // ---------------------------------------------------------------------------
-// Handle video-feed img load / resize
+// Video feed event handlers
 // ---------------------------------------------------------------------------
 
 videoFeed.addEventListener('load', () => {
   syncCanvas();
-  drawCalOverlay();
+  drawRegionOverlay();
 });
 
-// Reload MJPEG on error (e.g. server restart)
 videoFeed.addEventListener('error', () => {
   setTimeout(() => { videoFeed.src = '/video_feed?' + Date.now(); }, 2000);
 });
 
 window.addEventListener('resize', () => {
   syncCanvas();
-  drawCalOverlay();
+  drawRegionOverlay();
 });
+
+// Canvas is always interactive (pointer-events managed via JS)
+canvas.style.pointerEvents = 'auto';
 
 // ---------------------------------------------------------------------------
 // Boot

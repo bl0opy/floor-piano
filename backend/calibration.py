@@ -1,106 +1,92 @@
 """
-Calibration: maps a camera-space quadrilateral to a normalised top-down
-floor space, then divides that space into equal-width piano key columns.
+Multi-region calibration: up to 4 independent detection zones,
+each mapped to a single note.
 
-Coordinate convention
----------------------
-Camera space  : pixel (x, y) as seen in the video frame
-Floor space   : normalised (tx, ty) where x ∈ [0,1] spans the keyboard
-                left→right, y ∈ [0,1] spans front→back
-Key index     : floor(tx * num_keys), clamped to [0, num_keys-1]
+Each zone is a camera-space quadrilateral; detection checks whether a
+blob centroid falls inside it using a point-in-polygon test.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
-
+from typing import Any, Dict, List, Optional
 import cv2
 import numpy as np
 
 
-class CalibrationManager:
-    def __init__(self):
-        self.region_points: List[List[int]] = []   # 4 corners in camera space
-        self.num_keys: int = 8
-        self.homography: Optional[np.ndarray] = None      # camera → floor
-        self.inv_homography: Optional[np.ndarray] = None  # floor → camera
-        self.is_calibrated: bool = False
+MAX_REGIONS = 4
 
-    # ------------------------------------------------------------------
-    # Setting up calibration
-    # ------------------------------------------------------------------
+# Per-region colours (BGR) for CV annotations
+REGION_COLOURS_BGR = [
+    (247, 142,  79),   # blue   (#4f8ef7)
+    (122, 194,  52),   # green  (#34c27a)
+    ( 50, 168, 240),   # orange (#f0a832)
+    ( 82,  82, 224),   # red    (#e05252)
+]
 
-    def set_region(self, points: List[List[int]], num_keys: int) -> bool:
-        """
-        Compute homography from the four user-supplied corner points.
-        Returns True on success.
-        """
-        if len(points) != 4:
-            return False
-        self.region_points = points
-        self.num_keys = max(1, num_keys)
-        self._compute_homography()
-        self.is_calibrated = self.homography is not None
-        return self.is_calibrated
 
-    def _order_points(self, pts: np.ndarray) -> np.ndarray:
-        """Sort four points into (top-left, top-right, bottom-right, bottom-left)."""
-        rect = np.zeros((4, 2), dtype=np.float32)
-        s = pts.sum(axis=1)
-        rect[0] = pts[np.argmin(s)]   # top-left: smallest x+y
-        rect[2] = pts[np.argmax(s)]   # bottom-right: largest x+y
-        d = pts[:, 1] - pts[:, 0]     # y - x
-        rect[1] = pts[np.argmin(d)]   # top-right: smallest y-x (large x, small y)
-        rect[3] = pts[np.argmax(d)]   # bottom-left: largest y-x
-        return rect
+class DetectionRegion:
+    """A single quadrilateral zone with an associated note."""
 
-    def _compute_homography(self) -> None:
-        src = self._order_points(np.array(self.region_points, dtype=np.float32))
-        dst = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float32)
-        self.homography, _ = cv2.findHomography(src, dst)
-        self.inv_homography, _ = cv2.findHomography(dst, src)
-
-    # ------------------------------------------------------------------
-    # Runtime queries
-    # ------------------------------------------------------------------
-
-    def transform_point(self, x: int, y: int) -> Optional[Tuple[float, float]]:
-        """Project a camera-space point into normalised floor space."""
-        if self.homography is None:
-            return None
-        pt = np.array([[[float(x), float(y)]]], dtype=np.float32)
-        tx, ty = cv2.perspectiveTransform(pt, self.homography)[0][0]
-        return float(tx), float(ty)
+    def __init__(self, points: List[List[int]], note: str):
+        self.points: List[List[int]] = points   # 4 [x, y] camera-space pairs
+        self.note: str = note                   # e.g. "C4"
 
     def point_in_region(self, x: int, y: int) -> bool:
-        """Return True if the camera-space point is inside the calibration polygon."""
-        if not self.region_points:
+        if len(self.points) != 4:
             return False
-        poly = np.array(self.region_points, dtype=np.int32)
+        poly = np.array(self.points, dtype=np.int32)
         return cv2.pointPolygonTest(poly, (float(x), float(y)), False) >= 0
 
-    def get_key_index(self, floor_x: float) -> int:
-        idx = int(floor_x * self.num_keys)
-        return max(0, min(self.num_keys - 1, idx))
+    def to_dict(self) -> Dict:
+        return {"points": self.points, "note": self.note}
 
-    def get_key_regions_camera_space(self) -> List[Dict]:
+    @classmethod
+    def from_dict(cls, data: Dict) -> "DetectionRegion":
+        return cls(data["points"], data.get("note", "C4"))
+
+
+class CalibrationManager:
+    """Manages up to MAX_REGIONS detection zones, each with a note."""
+
+    def __init__(self):
+        self.regions: List[DetectionRegion] = []
+
+    @property
+    def is_calibrated(self) -> bool:
+        return len(self.regions) > 0
+
+    def set_regions(self, region_list: List[Dict]) -> bool:
         """
-        Return per-key quadrilateral corners in camera space.
-        Used by the CV pipeline to draw key boundaries on frames.
+        Accept a list of dicts: [{"points": [[x,y]×4], "note": "C4"}, ...]
+        Validates and stores up to MAX_REGIONS entries. Returns True on success.
         """
-        if not self.is_calibrated or self.inv_homography is None:
-            return []
-        regions = []
-        for i in range(self.num_keys):
-            xl = i / self.num_keys
-            xr = (i + 1) / self.num_keys
-            corners = np.array(
-                [[[xl, 0]], [[xr, 0]], [[xr, 1]], [[xl, 1]]], dtype=np.float32
-            )
-            cam = cv2.perspectiveTransform(corners, self.inv_homography)
-            regions.append({
-                "key_index": i,
-                "points": cam.reshape(-1, 2).astype(int).tolist(),
-            })
-        return regions
+        if not region_list or len(region_list) > MAX_REGIONS:
+            return False
+        new_regions = []
+        for r in region_list:
+            pts = r.get("points", [])
+            if len(pts) != 4:
+                return False
+            new_regions.append(DetectionRegion(pts, r.get("note", "C4")))
+        self.regions = new_regions
+        return True
+
+    def point_in_any_region(self, x: int, y: int) -> int:
+        """Return the index of the first region containing (x, y), or -1."""
+        for i, region in enumerate(self.regions):
+            if region.point_in_region(x, y):
+                return i
+        return -1
+
+    def get_regions_camera_space(self) -> List[Dict]:
+        """Return per-region dicts with points, note and colour for CV drawing."""
+        return [
+            {
+                "region_index": i,
+                "points": r.points,
+                "note": r.note,
+                "color": REGION_COLOURS_BGR[i % len(REGION_COLOURS_BGR)],
+            }
+            for i, r in enumerate(self.regions)
+        ]
 
     # ------------------------------------------------------------------
     # Serialisation
@@ -108,22 +94,10 @@ class CalibrationManager:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "region_points": self.region_points,
-            "num_keys": self.num_keys,
+            "regions": [r.to_dict() for r in self.regions],
             "is_calibrated": self.is_calibrated,
-            "homography": self.homography.tolist() if self.homography is not None else None,
         }
 
     def from_dict(self, data: Dict[str, Any]) -> None:
-        self.region_points = data.get("region_points", [])
-        self.num_keys = data.get("num_keys", 8)
-        h = data.get("homography")
-        if h and self.region_points:
-            self.homography = np.array(h, dtype=np.float64)
-            # Re-derive the inverse from the saved region points
-            src = self._order_points(np.array(self.region_points, dtype=np.float32))
-            dst = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float32)
-            self.inv_homography, _ = cv2.findHomography(dst, src)
-            self.is_calibrated = True
-        else:
-            self.is_calibrated = False
+        regions_data = data.get("regions", [])
+        self.regions = [DetectionRegion.from_dict(r) for r in regions_data if r.get("points")]
