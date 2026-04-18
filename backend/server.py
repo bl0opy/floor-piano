@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Set
 import cv2
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -32,6 +32,7 @@ from .cv_pipeline import DetectionPipeline
 from .note_mapper import ALL_NOTES, ALL_NOTES_BY_NAME, DEFAULT_NOTES
 
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
+GAME_DIR = Path(__file__).parent.parent / "game"
 
 # ---------------------------------------------------------------------------
 # Application-level singletons
@@ -155,6 +156,13 @@ async def index() -> HTMLResponse:
 async def game() -> HTMLResponse:
     game_file = Path(__file__).parent.parent / "game" / "index.html"
     return HTMLResponse(game_file.read_text())
+
+
+@app.get("/instagram.jpg")
+async def game_instagram_image() -> FileResponse:
+    """JPEG used on the piano tiles end screen (same path works with game/server.py)."""
+    path = GAME_DIR / "instagram.jpg"
+    return FileResponse(path)
 
 
 # ---------------------------------------------------------------------------
