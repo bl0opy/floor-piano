@@ -1,8 +1,8 @@
 # 🎹 Floor Piano
 
-An interactive floor piano that uses a camera to track where a person steps and plays the corresponding piano note in real time.
+An interactive floor piano that uses a webcam to track the location a person steps at, and plays the corresponding piano note in real-time.
 
-A piano keyboard region is drawn on the floor (projected or taped). The system watches via webcam, detects foot contacts using background subtraction, maps the detected position to a key, and plays the audio.
+A piano keyboard is drawn on the floor (projected or taped). The system watches via webcam, detects foot contacts using background subtraction, maps the detected position to a key, and plays the audio.
 
 ---
 
